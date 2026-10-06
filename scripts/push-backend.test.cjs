@@ -136,3 +136,21 @@ test('large queues respect the 50-delivery cap without spending retry attempts o
   b.context.deliverPushQueue(); assert.equal(b.fetches[1].body.deliveries.length, 6);
   assert.equal(b.sheets.get('PushQueue').data.length, 1);
 });
+
+test('unreadable queue rows and subscriptions are dropped without blocking deliveries', () => {
+  const b = backend(); b.setup(); const a = b.user('a@hays.test'), c = b.user('c@hays.test');
+  b.subscribe(c); const channel = b.ok('bootstrap', {}, a).conversations[0];
+  b.ok('sendMessage', { conversationId: channel.id, body: 'First', clientId: 'unreadable' }, a);
+  b.ok('sendMessage', { conversationId: channel.id, body: 'Second', clientId: 'readable' }, a);
+  b.sheets.get('PushQueue').data[1][4] = '{unreadable';
+  b.context.deliverPushQueue();
+  assert.equal(b.fetches.length, 1);
+  assert.equal(b.fetches[0].body.deliveries.length, 1);
+  assert.equal(b.sheets.get('PushQueue').data.length, 1);
+  b.ok('sendMessage', { conversationId: channel.id, body: 'Third', clientId: 'subscription' }, a);
+  b.sheets.get('PushSubscriptions').data[1][3] = '{unreadable';
+  b.context.deliverPushQueue();
+  assert.equal(b.fetches.length, 1);
+  assert.equal(b.sheets.get('PushSubscriptions').data.length, 1);
+  assert.equal(b.sheets.get('PushQueue').data.length, 1);
+});

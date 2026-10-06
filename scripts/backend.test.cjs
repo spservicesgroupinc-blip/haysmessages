@@ -218,3 +218,19 @@ test('HTTP envelope rejects malformed requests and never exposes editor-only adm
   assert.equal(b.call('createUser', { email: 'intruder@hays.test', role: 'admin' }, a).code, 'unknown_action');
   assert.equal(b.context.cell_('=SUM(A1:A2)'), "'=SUM(A1:A2)");
 });
+
+test('unreadable stored values and malformed bodies degrade safely instead of failing requests', () => {
+  const b = backend(); const a = b.user('a@hays.test'); const c = b.user('c@hays.test');
+  const general = b.ok('bootstrap', {}, a).conversations[0];
+  const message = b.ok('sendMessage', { conversationId: general.id, body: 'Unreadable storage', clientId: 'stored' }, a);
+  const row = b.sheets.get('Messages').data.find(r => r[0] === message.id);
+  row[9] = '{unreadable';
+  assert.deepEqual(b.ok('react', { messageId: message.id, emoji: 'check' }, a).reactions.check, [a.user.email]);
+  row[9] = '{"heart":"not a list"}';
+  assert.deepEqual(b.ok('react', { messageId: message.id, emoji: 'heart' }, a).reactions.heart, [a.user.email]);
+  const dm = b.ok('createConversation', { kind: 'dm', name: 'C', members: [c.user.email] }, a);
+  b.sheets.get('Conversations').data.find(r => r[0] === dm.id)[4] = '{unreadable';
+  assert.equal(b.ok('bootstrap', {}, a).conversations.some(x => x.id === dm.id), false);
+  assert.equal(b.call('listMessages', { conversationId: dm.id }, a).code, 'forbidden');
+  assert.equal(JSON.parse(b.context.doPost({ postData: { contents: '{' } })).code, 'bad_request');
+});

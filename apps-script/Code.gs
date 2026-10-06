@@ -47,6 +47,29 @@ function sheet_(name) {
   return sheet;
 }
 function rows_(sheet) { var data = sheet.getDataRange().getValues(); return data.slice(1); }
+// Stored JSON can be corrupted by manual sheet edits or older app versions.
+// Unreadable values must never fail a request; log them and keep a safe shape.
+function parseJson_(value,fallback) {
+  if(value==='' || value==null)return fallback;
+  try {var parsed=JSON.parse(value);return parsed==null ? fallback : parsed;}
+  catch(err) {Logger.log('Ignoring an unreadable stored value: '+(err && err.message ? err.message : err));return fallback;}
+}
+function storedList_(value) {
+  var list=parseJson_(value,[]);
+  if(!Array.isArray(list)){Logger.log('Ignoring stored data that is not a list.');return [];}
+  return list;
+}
+function storedMap_(value) {
+  var map=parseJson_(value,{});
+  if(!map || typeof map!=='object' || Array.isArray(map)){Logger.log('Ignoring stored data that is not a keyed object.');return {};}
+  return map;
+}
+// Reactions are maps of emoji to email lists; keep only well-formed entries.
+function storedReactions_(value) {
+  var reactions=storedMap_(value),safe={};
+  Object.keys(reactions).forEach(function(key){if(Array.isArray(reactions[key]))safe[key]=reactions[key].filter(function(email){return typeof email==='string';});});
+  return safe;
+}
 function fail_(code,message) { var err = new Error(message); err.code = code; throw err; }
 function json_(value) { return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON); }
 function digest_(value) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,value)); }
@@ -148,21 +171,26 @@ function registrationInfo_() {
 function register_(payload) {
   return session_(addUser_(accountEmail_(payload),payload.name,payload.password,'member'));
 }
-function conversation_(row) { return {id:String(row[0]),name:String(row[1]),description:String(row[2]),kind:String(row[3]),members:JSON.parse(row[4]||'[]'),createdBy:String(row[5]),createdAt:String(row[6]),lastActivity:String(row[6]),unread:0}; }
+function conversation_(row) { return {id:String(row[0]),name:String(row[1]),description:String(row[2]),kind:String(row[3]),members:storedList_(row[4]),createdBy:String(row[5]),createdAt:String(row[6]),lastActivity:String(row[6]),unread:0}; }
 function visible_(conversation,user) { return conversation.kind==='channel' || conversation.members.indexOf(user.email)>=0; }
 function requireConversation_(id,user) {
   var row=rows_(sheet_('Conversations')).find(function(r){return r[0]===id;});
   if(!row || !visible_(conversation_(row),user)) fail_('forbidden','This conversation is not available to you.');
   return conversation_(row);
 }
-function message_(row) { return {id:String(row[0]),conversationId:String(row[1]),authorEmail:String(row[2]),authorName:String(row[3]),body:row[7]===true ? '' : String(row[4]),createdAt:String(row[5]),updatedAt:String(row[6]),deleted:row[7]===true,parentId:String(row[8]),reactions:row[7]===true ? {} : JSON.parse(row[9]||'{}'),clientId:String(row[10])}; }
+function message_(row) { return {id:String(row[0]),conversationId:String(row[1]),authorEmail:String(row[2]),authorName:String(row[3]),body:row[7]===true ? '' : String(row[4]),createdAt:String(row[5]),updatedAt:String(row[6]),deleted:row[7]===true,parentId:String(row[8]),reactions:row[7]===true ? {} : storedReactions_(row[9]),clientId:String(row[10])}; }
 function bootstrap_(user) {
-  var receipts=rows_(sheet_('ReadReceipts')).filter(function(r){return r[0]===user.email;});
-  var messages=rows_(sheet_('Messages'));
+  var throughByConversation=Object.create(null);
+  rows_(sheet_('ReadReceipts')).forEach(function(r){if(r[0]===user.email)throughByConversation[String(r[1])]=String(r[2]);});
   var conversations=rows_(sheet_('Conversations')).map(conversation_).filter(function(c){return visible_(c,user);});
-  conversations.forEach(function(c){
-    var receipt=receipts.find(function(r){return r[1]===c.id;}); var through=receipt ? String(receipt[2]) : '';
-    messages.forEach(function(r){ if(r[1]===c.id){ if(String(r[5])>c.lastActivity)c.lastActivity=String(r[5]); if(r[7]!==true && r[2]!==user.email && String(r[5])>through)c.unread++; } });
+  // Locate each message's conversation once instead of rescanning every message
+  // for every conversation; large mailboxes stay linear instead of quadratic.
+  var byId=Object.create(null);
+  conversations.forEach(function(c){byId[c.id]=c;});
+  rows_(sheet_('Messages')).forEach(function(r){
+    var conversation=byId[String(r[1])];if(!conversation)return;
+    if(String(r[5])>conversation.lastActivity)conversation.lastActivity=String(r[5]);
+    if(r[7]!==true && r[2]!==user.email && String(r[5])>(throughByConversation[conversation.id]||''))conversation.unread++;
   });
   return {user:user,people:activeUsers_().map(person_),conversations:conversations};
 }
@@ -234,7 +262,7 @@ function mutateMessage_(payload,user) {
   if(payload.action==='react') {
     var emoji=String(payload.emoji||'');
     if(['thumbsup','heart','check','eyes'].indexOf(emoji)<0)fail_('bad_request','Unknown reaction.');
-    var reactions=JSON.parse(row[9]||'{}'), people=reactions[emoji]||[], position=people.indexOf(user.email);
+    var reactions=storedReactions_(row[9]), people=reactions[emoji]||[], position=people.indexOf(user.email);
     if(position>=0)people.splice(position,1); else people.push(user.email);
     reactions[emoji]=people; row[9]=JSON.stringify(reactions);
   } else {
@@ -286,11 +314,21 @@ function doPost(e) {
   try {
     var contents=e && e.postData && e.postData.contents;
     if(!contents || contents.length>25000)fail_('bad_request','Invalid request.');
-    var payload=JSON.parse(contents);
+    var payload=null;
+    try {payload=JSON.parse(contents);} catch(parseError) {fail_('bad_request','Invalid request body.');}
     if(!payload || typeof payload!=='object' || Array.isArray(payload) || typeof payload.action!=='string' || !payload.action || payload.action.length>50)fail_('bad_request','Invalid request.');
-    if(MUTATIONS.indexOf(payload.action)>=0){var candidate=LockService.getScriptLock();candidate.waitLock(30000);lock=candidate;}
+    if(MUTATIONS.indexOf(payload.action)>=0){
+      var candidate=LockService.getScriptLock();
+      try {candidate.waitLock(30000);} catch(lockError) {fail_('busy','The workspace is busy. Please try again in a moment.');}
+      lock=candidate;
+    }
     return json_({ok:true,data:handle_(payload)});
-  } catch(err) { return json_({ok:false,error:err.message||'Request failed.',code:err.code||'server_error'}); }
+  } catch(err) {
+    // Coded application errors are expected; anything else is unexpected and
+    // worth a server-side log before the generic response is returned.
+    if(!err || !err.code)Logger.log('Unhandled request error: '+((err && err.stack) ? err.stack : err));
+    return json_({ok:false,error:(err && err.message) || 'Request failed.',code:(err && err.code) || 'server_error'});
+  }
   finally {if(lock)lock.releaseLock();}
 }
 function doGet() { return json_({ok:true,data:{app:'Hays + Sons Team Messaging',version:7,configured:!!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),usernameType:'email',registrationMode:'open',features:['email-password-auth','open-registration','sales-dashboard','optional-push-on-send','empty-workspace-setup','message-id-pagination','root-message-pages','web-push']}}); }
@@ -356,7 +394,7 @@ function salesDate_(value,timezone) {
 /** Run periodically from the editor or an Apps Script time trigger. */
 function cleanupSessions() {
   var lock=LockService.getScriptLock();lock.waitLock(30000);
-  try {var sheet=sheet_('Sessions'), rows=rows_(sheet);for(var i=rows.length-1;i>=0;i--)if(new Date(rows[i][2]).getTime()<=Date.now())sheet.deleteRow(i+2);prunePushSubscriptions_();}
+  try {var sheet=sheet_('Sessions'), rows=rows_(sheet), removed=0;for(var i=rows.length-1;i>=0;i--)if(!(new Date(rows[i][2]).getTime()>Date.now())){sheet.deleteRow(i+2);removed++;}prunePushSubscriptions_();if(removed)Logger.log('Removed '+removed+' expired session(s).');}
   finally {lock.releaseLock();}
 }
 
@@ -413,7 +451,9 @@ function subscribePush_(payload,user) {
   var config=pushConfig_();if(!config.enabled)fail_('push_unavailable',config.reason);
   prunePushSubscriptions_();
   var subscription=validPushSubscription_(payload.subscription),hash=digest_(payload.sessionToken),sessions=rows_(sheet_('Sessions'));
-  var session=sessions.find(function(r){return equal_(r[0],hash);}),expiry=new Date(session[2]).getTime();
+  var session=sessions.find(function(r){return equal_(r[0],hash);});
+  if(!session)fail_('session_expired','Your session has expired. Please sign in again.');
+  var expiry=new Date(session[2]).getTime();
   if(subscription.expirationTime!=null)expiry=Math.min(expiry,subscription.expirationTime);
   var sheet=sheet_('PushSubscriptions'),records=rows_(sheet),id=digest_(subscription.endpoint),index=records.findIndex(function(r){return r[0]===id;});
   if(index<0 && records.filter(function(r){return r[1]===user.email;}).length>=10)fail_('push_limit','Remove an unused device before enabling more than 10 notification subscriptions.');
@@ -434,7 +474,7 @@ function revokePushSession_(hash) {
 function prunePushSubscriptions_() {
   var sheet=sheet_('PushSubscriptions');if(!sheet)return;
   var records=rows_(sheet),sessions=rows_(sheet_('Sessions')),users=activeUsers_(),key=PropertiesService.getScriptProperties().getProperty('VAPID_PUBLIC_KEY');
-  for(var i=records.length-1;i>=0;i--){var r=records[i];if(new Date(r[4]).getTime()<=Date.now() || r[6]!==key || !users.some(function(u){return u[0]===r[1];}) || !sessions.some(function(s){return equal_(s[0],r[2]) && s[1]===r[1] && new Date(s[2]).getTime()>Date.now();}))sheet.deleteRow(i+2);}
+  for(var i=records.length-1;i>=0;i--){var r=records[i];if(!(new Date(r[4]).getTime()>Date.now()) || r[6]!==key || !users.some(function(u){return u[0]===r[1];}) || !sessions.some(function(s){return equal_(s[0],r[2]) && s[1]===r[1] && new Date(s[2]).getTime()>Date.now();}))sheet.deleteRow(i+2);}
 }
 function enqueuePush_(messageRow) {
   // Never prevent a committed message from reaching the sender on push failures.
@@ -452,21 +492,34 @@ function deliverPushQueue() {
   try {
     var config=pushConfig_();if(!config.enabled)return;
     prunePushSubscriptions_();
-    var queue=sheet_('PushQueue'),jobs=rows_(queue),subscriptions=rows_(sheet_('PushSubscriptions')),messages=rows_(sheet_('Messages')),conversations=rows_(sheet_('Conversations')),receipts=rows_(sheet_('ReadReceipts')),deliveries=[],states=[],now=Date.now();
+    var queue=sheet_('PushQueue'),jobs=rows_(queue),subscriptions=rows_(sheet_('PushSubscriptions')),messages=rows_(sheet_('Messages')),conversations=rows_(sheet_('Conversations')),receipts=rows_(sheet_('ReadReceipts')),deliveries=[],states=[],gone=[],now=Date.now();
+    // A single unreadable job or subscription must never block the rest of the
+    // batch. Bad jobs are tracked with no targets and removed by the cleanup
+    // pass below, together with subscriptions whose stored JSON cannot be read.
     jobs.forEach(function(job,index){
-      if(new Date(job[6]).getTime()>now)return;
-      var pending=JSON.parse(job[4]||'[]'),remaining=[],message=messages.find(function(m){return m[0]===job[0] && m[7]!==true;}),convoRow=conversations.find(function(c){return c[0]===job[1];});
-      if(message && convoRow && now-new Date(job[3]).getTime()<86400000){
-        var conversation=conversation_(convoRow);
-        pending.forEach(function(target){
-          var id=target.id;if(target.attempts>=5)return;
-          var sub=subscriptions.find(function(s){return s[0]===id;});if(!sub || sub[1]!==target.email || !equal_(sub[2],target.sessionHash) || sub[1]===job[2] || !visible_(conversation,{email:sub[1]}))return;
-          if(receipts.some(function(r){return r[0]===sub[1] && r[1]===job[1] && String(r[2])>=String(job[3]);}))return;
-          remaining.push(target);
-          if(deliveries.length<50 && target.nextAt<=now)deliveries.push({id:job[0]+'|'+id,subscription:JSON.parse(sub[3]),payload:{title:'Hays + Sons',body:'You have a new team message.',tag:'conversation-'+job[1],data:{conversationId:job[1],messageId:job[0]}}});
-        });
+      try {
+        if(new Date(job[6]).getTime()>now)return;
+        var pending=storedList_(job[4]),remaining=[],message=messages.find(function(m){return m[0]===job[0] && m[7]!==true;}),convoRow=conversations.find(function(c){return c[0]===job[1];});
+        if(message && convoRow && now-new Date(job[3]).getTime()<86400000){
+          var conversation=conversation_(convoRow);
+          pending.forEach(function(target){
+            var id=target && target.id;if(id==null || id==='')return;
+            var attempts=Number(target.attempts);target.attempts=Number.isFinite(attempts) && attempts>0 ? Math.floor(attempts) : 0;
+            var nextAt=Number(target.nextAt);target.nextAt=Number.isFinite(nextAt) && nextAt>0 ? nextAt : 0;
+            if(target.attempts>=5)return;
+            var sub=subscriptions.find(function(s){return s[0]===id;});if(!sub || sub[1]!==target.email || !equal_(sub[2],target.sessionHash) || sub[1]===job[2] || !visible_(conversation,{email:sub[1]}))return;
+            if(receipts.some(function(r){return r[0]===sub[1] && r[1]===job[1] && String(r[2])>=String(job[3]);}))return;
+            var subscription=parseJson_(sub[3],null);
+            if(!subscription || typeof subscription!=='object' || Array.isArray(subscription)){Logger.log('Removing an unreadable push subscription.');gone.push(id);return;}
+            remaining.push(target);
+            if(deliveries.length<50 && target.nextAt<=now)deliveries.push({id:job[0]+'|'+id,subscription:subscription,payload:{title:'Hays + Sons',body:'You have a new team message.',tag:'conversation-'+job[1],data:{conversationId:job[1],messageId:job[0]}}});
+          });
+        }
+        states.push({index:index,row:job,remaining:remaining});
+      } catch(err) {
+        Logger.log('Dropping unreadable notification job '+(index+2)+': '+(err && err.message ? err.message : err));
+        states.push({index:index,row:job,remaining:[]});
       }
-      states.push({index:index,row:job,remaining:remaining});
     });
     var results=[];
     if(deliveries.length){
@@ -476,7 +529,6 @@ function deliverPushQueue() {
         if(response.getResponseCode()===200){var reply=JSON.parse(response.getContentText());if(Array.isArray(reply.results))results=reply.results;}
       } catch(err) {Logger.log('Push relay unavailable; queued deliveries will retry.');}
     }
-    var gone=[];
     states.reverse().forEach(function(state){
       var remaining=state.remaining.filter(function(target){
         var id=target.id;
