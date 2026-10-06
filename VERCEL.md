@@ -26,7 +26,7 @@ The current messaging endpoint is the `VITE_APPS_SCRIPT_URL` in [.env.example](.
 
 | Variable | Value / handling |
 | --- | --- |
-| `VITE_APPS_SCRIPT_URL` | `https://script.google.com/macros/s/AKfycbz1sX8h5Ao6_GEXu9nA9QiACzehrjHnN-SNrE0mgt1NIEaqzFd-LRQIOqxf9L0s0reB9w/exec` |
+| `VITE_APPS_SCRIPT_URL` | `https://script.google.com/macros/s/AKfycbwkB2KIrVF3i3ZNM7TmFCUF1QkKWkJRj8aljoo-Stwz_ihD5eSfzUaec0t_pe4zCFrT5w/exec` |
 | `VAPID_PUBLIC_KEY` | Public Web Push key; same key in Apps Script. |
 | `VAPID_PRIVATE_KEY` | Private sender key; server environment only. |
 | `VAPID_SUBJECT` | A real contact such as `mailto:administrator@your-company.com`. |
@@ -41,7 +41,7 @@ The frontend can deploy and install without sender secrets, but background push 
 1. Copy the local `apps-script/Code.gs` and `apps-script/appsscript.json` into the **dedicated messaging project**, preserving `MESSAGING_SPREADSHEET_ID`.
 2. Set Script Properties `VAPID_PUBLIC_KEY`, `PUSH_RELAY_SECRET`, and `PUSH_RELAY_URL=https://YOUR-STABLE-DOMAIN/api/push`.
 3. Run `setupPushMessaging()` in the Apps Script editor and authorize the added scopes. It creates the optional push tables and one background minute trigger without resetting messages or accounts.
-4. Update the existing messaging deployment to a **new version**, retaining its `/exec` URL. The current local status reports backend version `3`.
+4. Update the messaging deployment to a **new version** after backend changes. The current local and connected backend status report version `4`.
 5. Confirm `GET https://YOUR-STABLE-DOMAIN/api/push` reports `enabled: true`, and Apps Script Triggers/Executions show successful queue delivery.
 
 Use a stable deployment domain for installation and subscriptions. Preview domains can be protected by Vercel authentication; Apps Script and installed apps must be able to reach the chosen domain. Configure deployment protection appropriately for the intended public application endpoint. The relay still requires its own secret for every delivery request. Keep the VAPID keys unchanged across deployments; rotating them requires devices to subscribe again.
