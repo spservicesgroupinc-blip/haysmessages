@@ -1,5 +1,5 @@
 /**
- * Hays + Sons Team Messaging - Enterprise Suite (Version 8.1 - Hardened)
+ * Hays + Sons Team Messaging - Enterprise Suite (Version 8.2 - Cached and Consistent)
  * 
  * SETUP INSTRUCTIONS:
  * 1. Deploy in an Apps Script project.
@@ -23,7 +23,8 @@ var PUSH_SCHEMA = {
 
 var PASSWORD_ITERATIONS = 1500;
 
-// Note: uploadAttachment and heartbeat are excluded to prevent blocking database lockouts
+// Serialize shared spreadsheet writes, including monotonic read receipts.
+// Drive uploads and cache-only heartbeats do not need the spreadsheet lock.
 var MUTATIONS = [
   'login','register','logout','changePassword','updateProfile',
   'createConversation','leaveConversation','sendMessage','editMessage',
@@ -35,6 +36,20 @@ var MUTATIONS = [
 // ============================================================================
 
 var REQUEST_CACHE_ = {};
+var DB_CACHE_ = null;
+var SHEET_CACHE_ = {};
+
+function resetRequestCache_() {
+  DB_CACHE_ = null;
+  SHEET_CACHE_ = {};
+  invalidateSheetCache_();
+}
+
+function releaseWriteLock_(lock) {
+  // Commit buffered spreadsheet writes while exclusive access is still held.
+  try { SpreadsheetApp.flush(); }
+  finally { lock.releaseLock(); }
+}
 
 function invalidateSheetCache_(name) {
   if (name) delete REQUEST_CACHE_[name];
@@ -42,17 +57,21 @@ function invalidateSheetCache_(name) {
 }
 
 function db_() {
+  if (DB_CACHE_) return DB_CACHE_;
   var id = PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID');
   if (!id) fail_('not_configured', 'Run setupMessaging() in the Apps Script editor first.');
-  return SpreadsheetApp.openById(id);
+  DB_CACHE_ = SpreadsheetApp.openById(id);
+  return DB_CACHE_;
 }
 
 function sheet_(name) {
+  if (SHEET_CACHE_[name]) return SHEET_CACHE_[name];
   var sheet = db_().getSheetByName(name);
   // Enforce mandatory SCHEMA tables only; optional push sheets return null gracefully
   if (!sheet && SCHEMA[name]) {
     fail_('not_configured', 'Run setupMessaging() in the Apps Script editor to create the messaging tables.');
   }
+  if (sheet) SHEET_CACHE_[name] = sheet;
   return sheet;
 }
 
@@ -128,7 +147,7 @@ function setupMessaging() {
     props.setProperty('MESSAGING_SPREADSHEET_ID', db.getId());
     Logger.log('Messaging database initialized: ' + db.getUrl());
     return { spreadsheetUrl: db.getUrl() };
-  } finally { lock.releaseLock(); }
+  } finally { releaseWriteLock_(lock); }
 }
 
 // ============================================================================
@@ -247,7 +266,7 @@ function createUser(email, name, password, role) {
   lock.waitLock(30000);
   try {
     return addUser_(email, name, password, role || 'member');
-  } finally { lock.releaseLock(); }
+  } finally { releaseWriteLock_(lock); }
 }
 
 function resetUserPassword(email, password) {
@@ -268,7 +287,7 @@ function resetUserPassword(email, password) {
     
     bulkPruneSheet_(sheet_('Sessions'), function(r) { return r[1] !== email; });
     return { ok: true };
-  } finally { lock.releaseLock(); }
+  } finally { releaseWriteLock_(lock); }
 }
 
 function addUser_(email, name, password, role) {
@@ -445,14 +464,23 @@ function bootstrap_(user) {
   var byId = Object.create(null);
   convos.forEach(function(c) { byId[c.id] = c; });
   
-  rows_(sheet_('Messages')).forEach(function(r) {
-    var c = byId[String(r[1])];
-    if (!c) return;
-    if (String(r[5]) > c.lastActivity) c.lastActivity = String(r[5]);
-    if (r[7] !== true && r[2] !== user.email && String(r[5]) > (throughByConvo[c.id] || '')) {
-      c.unread++;
+  // Scan all history in bounded batches. Read only metadata columns B:H;
+  // reaction maps and attachment JSON can be large and aren't needed here.
+  if (convos.length) {
+    var messages = sheet_('Messages');
+    var lastRow = messages.getLastRow();
+    var batchSize = 2000;
+    for (var start = 2; start <= lastRow; start += batchSize) {
+      var metadata = messages.getRange(start, 2, Math.min(batchSize, lastRow - start + 1), 7).getValues();
+      metadata.forEach(function(r) {
+        var c = byId[String(r[0])];
+        if (!c) return;
+        var createdAt = String(r[4]);
+        if (createdAt > c.lastActivity) c.lastActivity = createdAt;
+        if (r[6] !== true && r[1] !== user.email && createdAt > (throughByConvo[c.id] || '')) c.unread++;
+      });
     }
-  });
+  }
   
   return {
     user: user,
@@ -929,7 +957,7 @@ function setupPushMessaging() {
       ScriptApp.newTrigger('deliverPushQueue').timeBased().everyMinutes(1).create();
     }
     return { ok: true };
-  } finally { lock.releaseLock(); }
+  } finally { releaseWriteLock_(lock); }
 }
 
 function pushSettings_() {
@@ -1182,7 +1210,7 @@ function deliverPushQueue() {
       bulkPruneSheet_(sheet_('PushSubscriptions'), function(r) { return gone.indexOf(r[0]) < 0; });
     }
     invalidateSheetCache_();
-  } finally { lock.releaseLock(); }
+  } finally { releaseWriteLock_(lock); }
 }
 
 // ============================================================================
@@ -1199,7 +1227,7 @@ function cleanupSessions() {
     });
     prunePushSubscriptions_();
     if (removed) Logger.log('Cleaned up ' + removed + ' expired sessions.');
-  } finally { lock.releaseLock(); }
+  } finally { releaseWriteLock_(lock); }
 }
 
 // ============================================================================
@@ -1253,6 +1281,7 @@ function handle_(payload) {
 }
 
 function doPost(e) {
+  resetRequestCache_();
   var lock = null;
   try {
     var contents = e && e.postData && e.postData.contents;
@@ -1272,7 +1301,13 @@ function doPost(e) {
       lock = candidate;
     }
     
-    return json_({ ok: true, data: handle_(payload) });
+    var data = handle_(payload);
+    if (lock) {
+      var completedLock = lock;
+      lock = null;
+      releaseWriteLock_(completedLock);
+    }
+    return json_({ ok: true, data: data });
   } catch(err) {
     if (!err || !err.code) Logger.log('Unhandled error: ' + ((err && err.stack) ? err.stack : err));
     return json_({
@@ -1281,7 +1316,9 @@ function doPost(e) {
       code: (err && err.code) || 'server_error'
     });
   } finally {
-    if (lock) lock.releaseLock();
+    try { if (lock) releaseWriteLock_(lock); }
+    catch (flushErr) { Logger.log('Failed to flush after request error: ' + flushErr); }
+    finally { resetRequestCache_(); }
   }
 }
 
@@ -1290,7 +1327,7 @@ function doGet() {
     ok: true,
     data: {
       app: 'Hays + Sons Team Messaging',
-      version: 8.1,
+      version: 8.2,
       configured: !!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),
       usernameType: 'email',
       features: [

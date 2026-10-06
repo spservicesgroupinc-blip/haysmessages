@@ -50,7 +50,7 @@ test('password resets are editor-only, retain accounts and revoke every session 
 test('public status reports the configured signup mode and disabled closes signup', () => {
   const b = backend();
   const status = JSON.parse(b.context.doGet()).data;
-  assert.equal(status.version, 8.1); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
+  assert.equal(status.version, 8.2); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
   assert.ok(status.features.includes('sales-aggregations'));
   b.properties.set('REGISTRATION_CODE', 'obsolete-code');
   b.properties.set('REGISTRATION_EMAIL_DOMAINS', 'company.test');
@@ -214,6 +214,49 @@ test('read receipts are monotonic, reject future timestamps, and isolate user un
   b.ok('markRead', { conversationId, through: new Date(0).toISOString() }, reader);
   assert.equal(unread(reader), 0);
   assert.equal(b.call('markRead', { conversationId, through: new Date(Date.now() + 60000).toISOString() }, reader).code, 'bad_request');
+});
+
+test('bootstrap counts full history and retains activity for conversations absent from the latest 1000 messages', () => {
+  const b = backend(); const author = b.user('author@hays.test'); const reader = b.user('reader@hays.test');
+  const [quiet, busy] = b.ok('bootstrap', {}, reader).conversations;
+  const messages = b.sheets.get('Messages');
+  const stamp = '2026-01-01T00:00:00.000Z';
+  b.sheets.get('Conversations').data.slice(1).forEach(row => { row[6] = '2025-12-01T00:00:00.000Z'; });
+  const add = (id, conversationId, email, deleted = false) => messages.appendRow([
+    id, conversationId, email, 'Author', 'Message', stamp, '', deleted, '', '{}', id, ''
+  ]);
+  add('quiet-old', quiet.id, author.user.email);
+  for (let i = 0; i < 4500; i++) add(`busy-${i}`, busy.id, author.user.email);
+  add('deleted', busy.id, author.user.email, true);
+  add('self', busy.id, reader.user.email);
+  const convos = b.ok('bootstrap', {}, reader).conversations;
+  assert.equal(convos.find(c => c.id === quiet.id).unread, 1);
+  assert.equal(convos.find(c => c.id === quiet.id).lastActivity, stamp);
+  assert.equal(convos.find(c => c.id === busy.id).unread, 4500);
+  b.ok('markRead', { conversationId: busy.id, through: stamp }, reader);
+  assert.equal(b.ok('bootstrap', {}, reader).conversations.find(c => c.id === busy.id).unread, 0);
+});
+
+test('HTTP requests refresh cached sessions without relying on the test harness cache reset', () => {
+  const b = backend(); const session = b.user('reader@hays.test');
+  const request = () => JSON.parse(b.context.doPost({ postData: { contents: JSON.stringify({ action: 'session', sessionToken: session.token }) } }));
+  assert.equal(request().ok, true);
+  // Prime a stale cached copy, then simulate another execution revoking the session.
+  b.context.rows_(b.context.sheet_('Sessions'));
+  b.sheets.get('Sessions').data.splice(1);
+  assert.equal(request().code, 'session_expired');
+});
+
+test('spreadsheet flush failures return an error and still release the write lock', () => {
+  const b = backend(); const author = b.user('author@hays.test');
+  const conversationId = b.ok('bootstrap', {}, author).conversations[0].id;
+  const flush = b.context.SpreadsheetApp.flush;
+  b.context.SpreadsheetApp.flush = () => { throw new Error('Commit unavailable'); };
+  const payload = { conversationId, body: 'Retry safely', clientId: 'flush-retry' };
+  assert.equal(b.call('sendMessage', payload, author).code, 'server_error');
+  b.context.SpreadsheetApp.flush = flush;
+  assert.ok(b.ok('sendMessage', payload, author).id);
+  assert.equal(b.sheets.get('Messages').data.length, 2);
 });
 
 test('HTTP envelope rejects malformed requests and never exposes editor-only administration', () => {

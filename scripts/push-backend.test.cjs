@@ -45,7 +45,7 @@ function backend({ channels = true } = {}) {
   let locked = false, outcome = () => 'delivered';
   const context = vm.createContext({
     PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties.get(key) || null, setProperty: (key, value) => properties.set(key, value) }) },
-    SpreadsheetApp: { create: () => db, openById: () => db },
+    SpreadsheetApp: { flush: () => { assert.equal(locked, true); }, create: () => db, openById: () => db },
     Utilities: { getUuid: () => crypto.randomUUID(), base64Encode: bytes => Buffer.from(bytes).toString('base64'), DigestAlgorithm: { SHA_256: 'sha256' }, computeDigest: (_, value) => crypto.createHash('sha256').update(value).digest(), computeHmacSha256Signature: (value, salt) => crypto.createHmac('sha256', salt).update(value).digest() },
     LockService: { getScriptLock: () => ({ waitLock: () => { assert.equal(locked, false); locked = true; }, tryLock: () => { if (locked) return false; locked = true; return true; }, releaseLock: () => { assert.equal(locked, true); locked = false; } }) },
     ScriptApp: { getProjectTriggers: () => triggers, newTrigger: handler => { const builder = { timeBased: () => builder, everyMinutes: minutes => { assert.equal(minutes, 1); return builder; }, create: () => triggers.push({ getHandlerFunction: () => handler }) }; return builder; } },

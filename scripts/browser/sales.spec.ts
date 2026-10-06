@@ -81,5 +81,5 @@ test('a retired hosting URL connects login and sales to the current workspace', 
   await expect(page.getByRole('button', {name:'TEST-001'})).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(endpoints.length).toBeGreaterThan(0);
-  expect([...new Set(endpoints)]).toEqual(['https://script.google.com/macros/s/AKfycbxOOS-5XQOPpc3skdOIZTKodi9G0EAyx9OAKpFKoL5bCXzh-fz0tFV2E07dhfJQgRFtiQ/exec']);
+  expect([...new Set(endpoints)]).toEqual(['https://script.google.com/macros/s/AKfycbxK5yd7Xsh_o5pfyLqKBq3MpBKjp-8ia3v9M7QNp8UFtlUiZYEkvvqVzDdLuZVhCZZLEg/exec']);
 });

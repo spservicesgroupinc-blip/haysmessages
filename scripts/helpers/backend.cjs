@@ -49,7 +49,7 @@ function backend({ channels = true, withoutPushEnqueue = false, salesRows = null
   let locked = false;
   const context = vm.createContext({
     PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties.get(key) || null, setProperty: (key, value) => properties.set(key, value) }) },
-    SpreadsheetApp: { create: () => db, openById: id => { if (salesRows && id === '1Ba1IEJEOb3ILhsZrOZSHCOT5-6pELnwGT-inUcVMcTk') return salesDb; assert.equal(id, 'messaging-test-db'); return db; } },
+    SpreadsheetApp: { flush: () => { assert.equal(locked, true); }, create: () => db, openById: id => { if (salesRows && id === '1Ba1IEJEOb3ILhsZrOZSHCOT5-6pELnwGT-inUcVMcTk') return salesDb; assert.equal(id, 'messaging-test-db'); return db; } },
     Utilities: {
       getUuid: () => crypto.randomUUID(), base64Encode: bytes => Buffer.from(bytes).toString('base64'),
       DigestAlgorithm: { SHA_256: 'sha256' }, computeDigest: (_, value) => crypto.createHash('sha256').update(value).digest(),

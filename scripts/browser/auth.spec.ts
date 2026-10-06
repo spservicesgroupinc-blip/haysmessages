@@ -22,7 +22,7 @@ test('an empty environment URL uses the default Apps Script connection and allow
   await page.getByRole('form', { name: 'Create company account' }).getByRole('button', { name: 'Create account', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
   expect(server.sheets.get('Users').data.some((row: unknown[]) => row[0] === 'first.signup@gmail.com')).toBe(true);
-  expect(endpoints).toContain('https://script.google.com/macros/s/AKfycbxOOS-5XQOPpc3skdOIZTKodi9G0EAyx9OAKpFKoL5bCXzh-fz0tFV2E07dhfJQgRFtiQ/exec');
+  expect(endpoints).toContain('https://script.google.com/macros/s/AKfycbxK5yd7Xsh_o5pfyLqKBq3MpBKjp-8ia3v9M7QNp8UFtlUiZYEkvvqVzDdLuZVhCZZLEg/exec');
 });
 
 test('removes old preview data and never restores a demo session', async ({ page }) => {
