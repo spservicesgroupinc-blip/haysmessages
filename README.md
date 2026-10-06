@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3001 and sign in with your company email address and messaging password. If you do not have an account, choose **Create account** and use your administrator's company invite code. Account creation appears only when enabled by the backend. The supplied Apps Script URL is configured in the ignored `.env.local` file. Restart Vite after changing environment variables. The URL is public frontend configuration; never put passwords, invite codes, or admin secrets in `VITE_*` variables. An unconfigured app shows a disabled sign-in form and an administrator contact message.
+Open http://localhost:3001 and sign in with your company email address and messaging password. If you do not have an account, choose the **Create account** button below Sign in and use your administrator's company invite code. This button is always visible, including while account settings are loading or unavailable. Apps Script enforces the company's registration settings when the form is submitted. The supplied Apps Script URL is configured in the ignored `.env.local` file. Restart Vite after changing environment variables. The URL is public frontend configuration; never put passwords, invite codes, or admin secrets in `VITE_*` variables. An unconfigured app shows a disabled sign-in form and an administrator contact message.
 
 Local preview accounts, messages, banners, and the preview entry point have been removed. Existing preview sessions, data, and drafts are cleared when the updated app opens. A newly initialized backend starts with empty tables: create your first channel after signing in. Existing Sheet accounts and conversations remain available.
 

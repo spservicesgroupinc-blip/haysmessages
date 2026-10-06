@@ -6,6 +6,7 @@ test('requires a company account and disables sign-in when no backend is configu
   await expect(page.getByRole('heading', { name: 'Sign in to your workspace.' })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('Contact your administrator');
   await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Create account', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /demo/i })).toHaveCount(0);
   await expect(page.locator('.app-shell')).toHaveCount(0);
 });
@@ -86,6 +87,47 @@ test('existing accounts can sign in when account discovery is unavailable', asyn
   await page.getByLabel('Password', { exact: true }).fill(account.password);
   await page.getByRole('form', { name: 'Company sign in' }).getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
+});
+
+test('Create account stays visible while settings load and when discovery reports disabled', async ({ page }, info) => {
+  await connectWorkspace(page);
+  let releaseSettings: () => void = () => {};
+  const settingsGate = new Promise<void>(resolve => { releaseSettings = resolve; });
+  await page.route('https://script.google.com/**', async route => {
+    if (route.request().postDataJSON().action === 'registrationInfo') {
+      await settingsGate;
+      await route.fulfill({ json: { ok: true, data: { enabled: false, requiresInvite: true, minPasswordLength: 10 } } });
+    } else await route.fallback();
+  });
+  await page.goto('http://localhost:3002', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: 'Create account', exact: true })).toBeVisible();
+  await page.screenshot({ path: `test-results/${info.project.name}-create-account-button.png`, fullPage: true });
+  await page.getByRole('button', { name: 'Create account', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Join your team.' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Your name' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Company invite code' })).toBeVisible();
+  releaseSettings();
+  await expect(page.getByRole('textbox', { name: 'Company invite code' })).toHaveAttribute('required', '');
+  await page.getByRole('button', { name: 'Back to sign in', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Sign in to your workspace.' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create account', exact: true })).toBeVisible();
+});
+
+test('creates a real account even when registration settings cannot be fetched', async ({ page }) => {
+  const server = await connectWorkspace(page);
+  await page.route('https://script.google.com/**', async route => {
+    if (route.request().postDataJSON().action === 'registrationInfo') await route.abort('failed');
+    else await route.fallback();
+  });
+  await page.goto('http://localhost:3002');
+  await page.getByRole('button', { name: 'Create account', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Your name' }).fill('New teammate');
+  await page.getByRole('textbox', { name: 'Username', exact: true }).fill('discovery-unavailable@hays.test');
+  await page.getByLabel('Password', { exact: true }).fill('new member password');
+  await page.getByRole('textbox', { name: 'Company invite code' }).fill(server.properties.get('REGISTRATION_CODE'));
+  await page.getByRole('form', { name: 'Create company account' }).getByRole('button', { name: 'Create account', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
+  expect(server.sheets.get('Users').data.some((row: unknown[]) => row[0] === 'discovery-unavailable@hays.test')).toBe(true);
 });
 
 test('an empty Google Sheet workspace shows onboarding and creates its first real channel', async ({ page }) => {
