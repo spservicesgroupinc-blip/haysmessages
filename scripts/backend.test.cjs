@@ -1,63 +1,64 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const crypto = require('node:crypto');
+const { backend } = require('./helpers/backend.cjs');
 
-function backend() {
-  const properties = new Map();
-  const sheets = new Map();
-  class Sheet {
-    constructor() { this.data = []; }
-    appendRow(row) { this.data.push([...row]); return this; }
-    getLastRow() { return this.data.length; }
-    getDataRange() { return { getValues: () => this.data.map(row => [...row]) }; }
-    getRange(row, column, height = 1, width = 1) {
-      const range = {
-        setValues: values => { for (let i = 0; i < height; i++) for (let j = 0; j < width; j++) this.data[row - 1 + i][column - 1 + j] = values[i][j]; return range; },
-        setValue: value => range.setValues([[value]]),
-        setBackground: () => range, setFontColor: () => range, setFontWeight: () => range,
-      };
-      return range;
-    }
-    setFrozenRows() {}
-    deleteRow(row) { this.data.splice(row - 1, 1); }
-  }
-  const db = { getSheetByName: name => sheets.get(name), insertSheet: name => { const sheet = new Sheet(); sheets.set(name, sheet); return sheet; }, getId: () => 'messaging-test-db', getUrl: () => 'https://example.test/messaging' };
-  let locked = false;
-  const context = vm.createContext({
-    PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties.get(key) || null, setProperty: (key, value) => properties.set(key, value) }) },
-    SpreadsheetApp: { create: () => db, openById: id => { assert.equal(id, 'messaging-test-db'); return db; } },
-    Utilities: {
-      getUuid: () => crypto.randomUUID(), base64Encode: bytes => Buffer.from(bytes).toString('base64'),
-      DigestAlgorithm: { SHA_256: 'sha256' }, computeDigest: (_, value) => crypto.createHash('sha256').update(value).digest(),
-      computeHmacSha256Signature: (value, salt) => crypto.createHmac('sha256', salt).update(value).digest(),
-    },
-    LockService: { getScriptLock: () => ({ waitLock: () => { assert.equal(locked, false); locked = true; }, releaseLock: () => { assert.equal(locked, true); locked = false; } }) },
-    ContentService: { MimeType: { JSON: 'application/json' }, createTextOutput: value => ({ setMimeType: () => value }) },
-    Logger: { log: () => {} },
-  });
-  vm.runInContext(fs.readFileSync('apps-script/Code.gs', 'utf8'), context);
-  context.setupMessaging();
-  function call(action, payload = {}, session) {
-    const result = JSON.parse(context.doPost({ postData: { contents: JSON.stringify({ ...payload, action, sessionToken: session?.token }) } }));
-    assert.equal(locked, false, 'request must release its lock');
-    return result;
-  }
-  function ok(action, payload, session) { const result = call(action, payload, session); assert.equal(result.ok, true, JSON.stringify(result)); return result.data; }
-  function user(email, role = 'member', password = 'correct password') {
-    context.createUser(email, email.split('@')[0], password, role);
-    return ok('login', { email, password });
-  }
-  return { context, properties, sheets, call, ok, user };
-}
-
-test('setup is idempotent, creates only messaging tables and default channels', () => {
-  const b = backend(); b.context.setupMessaging();
+test('setup creates empty tables, is idempotent and preserves existing accounts and messages', () => {
+  const b = backend({ channels: false }); b.context.setupMessaging();
   assert.equal(b.sheets.size, 5);
-  assert.equal(b.sheets.get('Conversations').data.length, 5);
+  for (const sheet of b.sheets.values()) assert.equal(sheet.data.length, 1);
   assert.equal(b.properties.get('REGISTRATION_MODE'), 'invite');
   assert.ok(b.properties.get('REGISTRATION_CODE'));
+  const session = b.user('admin@hays.test', 'admin');
+  assert.deepEqual(b.ok('bootstrap', {}, session).conversations, []);
+  const conversation = b.ok('createConversation', { kind: 'channel', name: 'company-updates' }, session);
+  const message = b.ok('sendMessage', { conversationId: conversation.id, body: 'First company message', clientId: 'first' }, session);
+  b.context.setupMessaging();
+  assert.equal(b.sheets.get('Users').data.length, 2);
+  assert.equal(b.sheets.get('Conversations').data.length, 2);
+  assert.equal(b.ok('listMessages', { conversationId: conversation.id }, session).messages[0].id, message.id);
+});
+
+test('company email usernames normalize, support both payload names and reject conflicting identities', () => {
+  const b = backend(); b.user('alex@hays.test');
+  assert.equal(b.ok('login', { username: '  ALEX@HAYS.TEST  ', password: 'correct password' }).user.email, 'alex@hays.test');
+  assert.equal(b.ok('login', { email: ' ALEX@HAYS.TEST ', password: 'correct password' }).user.email, 'alex@hays.test');
+  assert.equal(b.call('login', { email: 'alex@hays.test', username: 'other@hays.test', password: 'correct password' }).code, 'bad_request');
+  assert.equal(b.call('login', { username: 'alex', password: 'correct password' }).code, 'bad_request');
+  const registered = b.ok('register', { username: 'new@hays.test', name: 'New teammate', password: 'new password', inviteCode: b.properties.get('REGISTRATION_CODE') });
+  assert.equal(registered.user.email, 'new@hays.test');
+});
+
+test('password resets are editor-only, retain accounts and revoke every session for that account', () => {
+  const b = backend(); const first = b.user('alex@hays.test');
+  const second = b.ok('login', { email: first.user.email, password: 'correct password' });
+  const other = b.user('other@hays.test');
+  const original = [...b.sheets.get('Users').data[1]];
+  assert.equal(b.call('resetUserPassword', { email: first.user.email, password: 'replacement password' }, first).code, 'unknown_action');
+  assert.throws(() => b.context.resetUserPassword(first.user.email, 'short'), /at least 10/);
+  b.context.resetUserPassword(first.user.email.toUpperCase(), 'replacement password');
+  assert.equal(b.call('session', {}, first).code, 'session_expired');
+  assert.equal(b.call('session', {}, second).code, 'session_expired');
+  assert.equal(b.ok('session', {}, other).user.email, other.user.email);
+  assert.equal(b.call('login', { email: first.user.email, password: 'correct password' }).code, 'invalid_credentials');
+  assert.ok(b.ok('login', { email: first.user.email, password: 'replacement password' }).token);
+  const updated = b.sheets.get('Users').data[1];
+  assert.deepEqual(updated.slice(0, 3), original.slice(0, 3));
+  assert.notEqual(updated[3], original[3]); assert.notEqual(updated[4], original[4]);
+  assert.notEqual(updated[4], 'replacement password');
+});
+
+test('public status reports the auth version and invalid registration settings fail closed', () => {
+  const b = backend();
+  const status = JSON.parse(b.context.doGet()).data;
+  assert.equal(status.version, 4); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
+  b.properties.set('REGISTRATION_MODE', 'invalid');
+  assert.equal(b.ok('registrationInfo').enabled, false);
+  assert.equal(b.call('register', { username: 'new@hays.test', name: 'New', password: 'correct password' }).code, 'registration_closed');
+  b.properties.set('REGISTRATION_MODE', ' INVITE ');
+  assert.equal(b.ok('registrationInfo').requiresInvite, true);
+  b.properties.set('REGISTRATION_MODE', 'open');
+  assert.equal(b.ok('registrationInfo').requiresInvite, false);
+  assert.ok(b.ok('register', { username: 'new@hays.test', name: 'New', password: 'correct password' }).token);
 });
 
 test('sessions require valid credentials and expire, deactivate and revoke correctly', () => {
@@ -65,6 +66,8 @@ test('sessions require valid credentials and expire, deactivate and revoke corre
   assert.equal(b.call('bootstrap').code, 'unauthorized');
   assert.equal(b.call('login', { email: 'alex@hays.test', password: 'wrong password' }).code, 'invalid_credentials');
   assert.equal(b.call('session', {}, { token: 'invented' }).code, 'session_expired');
+  assert.equal(b.call('session', {}, { token: { toString: 'invented' } }).code, 'unauthorized');
+  assert.equal(b.call('session', {}, { token: 'x'.repeat(201) }).code, 'unauthorized');
   assert.equal(b.ok('session', {}, session).user.email, 'alex@hays.test');
   b.sheets.get('Users').data[1][5] = false;
   assert.equal(b.call('session', {}, session).code, 'session_expired');
@@ -185,7 +188,7 @@ test('read receipts are monotonic, reject future timestamps, and isolate user un
 
 test('HTTP envelope rejects malformed requests and never exposes editor-only administration', () => {
   const b = backend(); const a = b.user('a@hays.test');
-  for (const contents of ['', 'null', '[]', '{', 'x'.repeat(25001)]) assert.equal(JSON.parse(b.context.doPost({ postData: { contents } })).ok, false);
+  for (const contents of ['', 'null', '[]', '{', '{}', '{"action":{}}', '{"action":""}', 'x'.repeat(25001)]) assert.equal(JSON.parse(b.context.doPost({ postData: { contents } })).ok, false);
   assert.equal(b.call('createUser', { email: 'intruder@hays.test', role: 'admin' }, a).code, 'unknown_action');
   assert.equal(b.context.cell_('=SUM(A1:A2)'), "'=SUM(A1:A2)");
 });

@@ -1,10 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
+import { account, connectWorkspace, signIn } from './workspace';
 
-async function demo(page: Page) {
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Explore demo workspace' }).click();
-  await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
-  await expect(page.getByText('Good morning, team!', { exact: false })).toBeVisible();
+async function workspace(page: Page) {
+  const server = await connectWorkspace(page);
+  await signIn(page);
+  return server;
 }
 async function nav(page: Page) {
   const button = page.getByRole('button', { name: 'Open navigation' });
@@ -16,9 +16,9 @@ async function choose(page: Page, name: string) {
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
 }
 
-test('demo sends, edits, reacts, replies, searches, deletes and persists messages', async ({ page }, info) => {
+test('authenticated workspace sends, edits, reacts, replies, searches, deletes and persists messages', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
-  await demo(page);
+  await workspace(page);
   if (info.project.name === 'desktop') await expect(page.getByRole('button', { name: 'Open navigation' })).toBeHidden();
   await page.getByRole('textbox', { name: 'Message #general' }).fill('Crew update from browser test');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -57,7 +57,7 @@ test('demo sends, edits, reacts, replies, searches, deletes and persists message
 });
 
 test('creates channels, direct and group conversations, preserves drafts and signs out', async ({ page }) => {
-  await demo(page);
+  await workspace(page);
   await page.getByRole('textbox', { name: 'Message #general' }).fill('Unsent draft');
   await choose(page, 'sales');
   await choose(page, 'general');
@@ -67,30 +67,28 @@ test('creates channels, direct and group conversations, preserves drafts and sig
   await page.getByRole('button', { name: 'Create conversation', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'field-updates', exact: true })).toBeVisible();
   await nav(page); await page.getByRole('button', { name: 'Create direct message', exact: true }).click();
-  await page.getByRole('radio', { name: 'Alex Morgan' }).check();
+  await page.getByRole('radio', { name: 'Teammate One' }).check();
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Alex Morgan', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Teammate One', exact: true })).toBeVisible();
   await nav(page); await page.getByRole('button', { name: 'Create group', exact: true }).click();
   await page.getByRole('textbox', { name: 'Group name' }).fill('Field crew');
-  await page.getByRole('checkbox', { name: 'Jordan Davis' }).check();
-  await page.getByRole('checkbox', { name: 'Casey Taylor' }).check();
+  await page.getByRole('checkbox', { name: 'Teammate Two' }).check();
+  await page.getByRole('checkbox', { name: 'Teammate Three' }).check();
   await page.getByRole('button', { name: 'Create conversation', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Field crew', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Conversation details' }).click();
   await expect(page.getByRole('heading', { name: '3 teammates' })).toBeVisible();
   await page.getByRole('button', { name: 'Close dialog' }).click();
   await nav(page); await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Explore demo workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sign in to your workspace.' })).toBeVisible();
 });
 
 test('loads older messages with tied timestamps and searches paginated results', async ({ page }) => {
-  await demo(page);
-  await page.evaluate(() => {
-    const key = 'hays.messages.demo.v1'; const store = JSON.parse(localStorage.getItem(key)!);
-    const createdAt = new Date(Date.now() - 1000).toISOString();
-    for (let i = 0; i < 125; i++) store.messages.push({ id: `test-${i}`, conversationId: 'general', authorEmail: 'you@hays.example', authorName: 'You', body: `Pagination update ${i}`, createdAt, updatedAt: '', deleted: false, parentId: '', reactions: {}, clientId: `test-${i}` });
-    localStorage.setItem(key, JSON.stringify(store));
-  });
+  const server = await workspace(page);
+  const session = server.ok('login', { email: account.email, password: account.password });
+  const conversationId = server.ok('bootstrap', {}, session).conversations.find((c: {name: string}) => c.name === 'general').id;
+  for (let i = 0; i < 125; i++) server.ok('sendMessage', { conversationId, body: `Pagination update ${i}`, clientId: `test-${i}` }, session);
+  server.sheets.get('Messages').data.slice(1).forEach((row: unknown[]) => { row[5] = new Date(Date.now() - 1000).toISOString(); });
   await page.reload();
   await page.locator('.message-list').evaluate(e => { e.scrollTop = 0; });
   await page.getByRole('button', { name: 'Load earlier messages' }).click();
@@ -127,7 +125,7 @@ test('configured login preserves failed-send draft, retries the same identifier 
     await route.fulfill({ json: { ok: true, data } });
   });
   await page.goto('http://localhost:3002');
-  await page.getByRole('textbox', { name: 'Company email' }).fill(user.email);
+  await page.getByRole('textbox', { name: 'Username', exact: true }).fill(user.email);
   await page.getByLabel('Password', { exact: true }).fill('fake browser password');
   await page.locator('form').getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();

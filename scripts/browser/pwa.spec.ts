@@ -37,7 +37,7 @@ async function openDeviceSettings(page: Page) {
   if (await menu.isVisible()) await menu.click();
 }
 
-test('production manifest is installable, icons are real PNGs, and demo reloads offline', async ({ page, context }) => {
+test('production manifest is installable, icons are real PNGs, and the sign-in page reloads offline', async ({ page, context }) => {
   await page.route('https://script.google.com/**', route => route.fulfill({ json: { ok: true, data: { enabled: false, requiresInvite: true, minPasswordLength: 10 } } }));
   await ready(page);
   const cdp = await context.newCDPSession(page);
@@ -54,13 +54,12 @@ test('production manifest is installable, icons are real PNGs, and demo reloads 
   // Playwright's isolated contexts cannot offer installation; all app-related checks still apply.
   expect((await cdp.send('Page.getInstallabilityErrors')).installabilityErrors.filter(error => error.errorId !== 'in-incognito')).toEqual([]);
   await cdp.detach();
-  await page.getByRole('button', { name: 'Explore demo workspace' }).click();
-  await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sign in to your workspace.' })).toBeVisible();
   await context.setOffline(true);
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
-  await expect(page.getByText('Good morning, team!', { exact: false })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sign in to your workspace.' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Username', exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
   await expect(page.getByRole('status')).toContainText('Offline view');
   const cached = await page.evaluate(async () => (await caches.keys()).filter(name => name.startsWith('hays-messages-shell-')));
@@ -84,7 +83,7 @@ test('saved company messages include edits offline, failed sends retain drafts, 
   await page.reload(); await expect(composer).toHaveValue('Keep this draft until reconnect');
   await context.setOffline(false);
   await openDeviceSettings(page); await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'A place for your team.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sign in to your workspace.' })).toBeVisible();
   const records = await page.evaluate(async () => new Promise<number>((resolve, reject) => {
     const request = indexedDB.open('hays-offline-v1', 1);
     request.onsuccess = () => { const db = request.result; const count = db.transaction('reads').objectStore('reads').count(); count.onsuccess = () => { resolve(count.result); db.close(); }; count.onerror = () => reject(count.error); };
@@ -174,7 +173,7 @@ test('normal desktop browser profile meets native installation criteria', async 
   const browser = await chromium.launchPersistentContext(info.outputPath('install-profile'), { channel: 'msedge', headless: true });
   try {
     const page = await browser.newPage();
-    await page.route('https://script.google.com/**', route => route.fulfill({ json: { ok: true, data: { enabled: false } } }));
+    await mockWorkspace(page);
     await ready(page);
     const cdp = await browser.newCDPSession(page);
     expect((await cdp.send('Page.getAppManifest')).errors).toEqual([]);
@@ -200,13 +199,13 @@ test('a new service worker waits for confirmation and preserves drafts through a
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
-    await page.route('https://script.google.com/**', route => route.fulfill({ json: { ok: true, data: { enabled: false } } }));
+    await mockWorkspace(page);
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Preview server did not start.');
     await page.goto(`http://127.0.0.1:${address.port}`);
     await page.evaluate(async () => { await navigator.serviceWorker.ready; });
     await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
-    await page.getByRole('button', { name: 'Explore demo workspace' }).click();
+    await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
     const composer = page.getByRole('textbox', { name: 'Message #general' });
     await composer.fill('Keep my draft while updating');
     workerSource = initialWorker.replace(/const CACHE_NAME = CACHE_PREFIX \+ '[^']+';/, "const CACHE_NAME = CACHE_PREFIX + 'test-next-release';");

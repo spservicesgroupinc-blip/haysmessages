@@ -22,6 +22,8 @@ This workspace currently has no Git repository. You can first put the prepared s
 
 Set these under Vercel Project > Settings > Environment Variables. Apply them to the deployment environments you will use, and rebuild after changing the frontend URL.
 
+The current messaging endpoint is the `VITE_APPS_SCRIPT_URL` in [.env.example](.env.example). It reports backend version `4` with company-email authentication. Use that same URL in Vercel to publish the updated app.
+
 | Variable | Value / handling |
 | --- | --- |
 | `VITE_APPS_SCRIPT_URL` | `https://script.google.com/macros/s/AKfycbz1sX8h5Ao6_GEXu9nA9QiACzehrjHnN-SNrE0mgt1NIEaqzFd-LRQIOqxf9L0s0reB9w/exec` |

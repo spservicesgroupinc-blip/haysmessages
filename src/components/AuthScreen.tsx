@@ -1,42 +1,69 @@
 import { useEffect, useState } from 'react';
-import { ArrowRight, Loader2, MessageSquare, ShieldCheck } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, Loader2, MessageSquare, ShieldCheck } from 'lucide-react';
 import { BrandLogo } from './BrandLogo';
 import { DeviceControls } from './DeviceControls';
 import { configured, request } from '../lib/api';
-import { demoSession } from '../lib/demo';
 import type { RegistrationInfo, Session } from '../lib/types';
 
-export function AuthScreen({onSession,notice}:{onSession:(session:Session)=>void;notice?:string}) {
-  const [register,setRegister]=useState(false);
-  const [info,setInfo]=useState<RegistrationInfo|null>(null);
-  const [busy,setBusy]=useState(false);
-  const [error,setError]=useState('');
-  useEffect(()=>{if(configured)void request<RegistrationInfo>('registrationInfo').then(setInfo).catch(e=>setError(e.message));},[]);
-  async function submit(event:React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();setBusy(true);setError('');
-    const form=new FormData(event.currentTarget);
-    try {onSession(await request<Session>(register?'register':'login',Object.fromEntries(form.entries())));}catch(e){setError(e instanceof Error?e.message:'Sign-in failed.');}finally{setBusy(false);}
+export function AuthScreen({ onSession, notice }: { onSession: (session: Session) => void; notice?: string }) {
+  const [register, setRegister] = useState(false);
+  const [info, setInfo] = useState<RegistrationInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  useEffect(() => {
+    if (!configured) return;
+    const controller = new AbortController();
+    // Account creation availability must not prevent existing accounts from signing in.
+    void request<RegistrationInfo>('registrationInfo', {}, null, controller.signal)
+      .then(setInfo).catch(() => {});
+    return () => controller.abort();
+  }, []);
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy || !configured) return;
+    setBusy(true); setError('');
+    const form = new FormData(event.currentTarget);
+    const payload = Object.fromEntries(form.entries());
+    payload.email = String(payload.email).trim().toLowerCase();
+    try {
+      const session = await request<Session>(register ? 'register' : 'login', payload);
+      if (!session?.token || !session.user?.email || !session.user.name ||
+          !['admin', 'member'].includes(session.user.role) ||
+          !Number.isFinite(Date.parse(session.expiresAt)) || Date.parse(session.expiresAt) <= Date.now()) {
+        throw new Error('Sign-in could not be completed. Please try again.');
+      }
+      onSession(session);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Sign-in failed. Please try again.');
+    } finally { setBusy(false); }
   }
   return <div className="auth-page">
     <div className="auth-card">
       <BrandLogo size={42} sublabel="Team Messaging" />
-      <div className="auth-heading"><span className="brand-icon"><MessageSquare size={22}/></span><h1>A place for your team.</h1><p>Keep sales, project managers, and the office connected. One conversation at a time.</p></div>
+      <div className="auth-heading"><span className="brand-icon"><MessageSquare size={22} /></span><h1>{register ? 'Join your team.' : 'Sign in to your workspace.'}</h1><p>{register ? 'Create your company account to start working with your team.' : 'Keep your team connected. Sign in with your company account to get started.'}</p></div>
       {notice && <p className="notice" role="status">{notice}</p>}
-      {!configured && <p className="notice">The messaging backend is ready to connect. Explore the demo while your Apps Script deployment is being set up.</p>}
-      {configured && <>
-        <div className="auth-tabs"><button className={!register?'selected':''} onClick={()=>{setRegister(false);setError('');}}>Sign in</button>{info?.enabled && <button className={register?'selected':''} onClick={()=>{setRegister(true);setError('');}}>Create account</button>}</div>
-        <form onSubmit={submit} className="form-stack">
-          {register && <label>Your name<input name="name" autoComplete="name" required maxLength={80}/></label>}
-          <label>Company email<input name="email" type="email" autoComplete="username" required maxLength={254}/></label>
-          <label>Password<input name="password" type="password" autoComplete={register?'new-password':'current-password'} required minLength={register?(info?.minPasswordLength||10):undefined} maxLength={256}/></label>
-          {register && info?.requiresInvite && <label>Company invite code<input name="inviteCode" required autoComplete="off"/><span className="field-hint">Ask your administrator for the team invite code.</span></label>}
-          {error && <p className="error" role="alert">{error}</p>}
-          <button className="button primary" disabled={busy}>{busy?<Loader2 className="spin" size={17}/>:<ArrowRight size={17}/>} {register?'Create account':'Sign in'}</button>
-        </form>
-      </>}
-      <button className="button demo-button" onClick={()=>onSession(demoSession())}>Explore demo workspace <ArrowRight size={16}/></button>
+      {!configured && <p className="notice" role="alert">Sign-in is not available yet. Contact your administrator to connect the company workspace.</p>}
+      {info?.enabled && <div className="auth-tabs" aria-label="Account access">
+        <button type="button" disabled={busy} className={!register ? 'selected' : ''} aria-pressed={!register} onClick={() => { setRegister(false); setError(''); setShowPassword(false); }}>Sign in</button>
+        <button type="button" disabled={busy} className={register ? 'selected' : ''} aria-pressed={register} onClick={() => { setRegister(true); setError(''); setShowPassword(false); }}>Create account</button>
+      </div>}
+      <form onSubmit={submit} className="form-stack" aria-label={register ? 'Create company account' : 'Company sign in'}>
+        <fieldset disabled={busy || !configured} className="auth-fields">
+          {register && <label>Your name<input name="name" autoComplete="name" required maxLength={80} /></label>}
+          <label>Username<input name="email" type="email" aria-label="Username" autoComplete="username" autoCapitalize="none" spellCheck={false} required maxLength={254} aria-describedby="username-hint" /><span id="username-hint" className="field-hint">Use your company email address.</span></label>
+          <label>Password<span className="password-field">
+            <input name="password" type={showPassword ? 'text' : 'password'} aria-label="Password" autoComplete={register ? 'new-password' : 'current-password'} required minLength={register ? (info?.minPasswordLength || 10) : undefined} maxLength={256} />
+            <button type="button" className="icon-button password-toggle" aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button>
+          </span>{register && <span className="field-hint">Use at least {info?.minPasswordLength || 10} characters.</span>}</label>
+          {register && info?.requiresInvite && <label>Company invite code<input name="inviteCode" aria-label="Company invite code" required autoComplete="off" maxLength={256} /><span className="field-hint">Ask your administrator for the team invite code.</span></label>}
+        </fieldset>
+        {error && <p className="error" role="alert">{error}</p>}
+        <button className="button primary" type="submit" disabled={busy || !configured}>{busy ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />} {busy ? (register ? 'Creating account…' : 'Signing in…') : (register ? 'Create account' : 'Sign in')}</button>
+      </form>
+      <p className="auth-help">{register ? 'Already have an account? Choose Sign in above.' : 'Need an account or a password reset? Contact your administrator.'}</p>
       <DeviceControls />
-      <p className="auth-foot"><ShieldCheck size={14}/> Company conversations, in one workspace.</p>
+      <p className="auth-foot"><ShieldCheck size={14} /> Your company account. Your team workspace.</p>
     </div>
     <p className="auth-company">Hays &amp; Sons Complete Restoration</p>
   </div>;

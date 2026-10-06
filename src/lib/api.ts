@@ -1,5 +1,4 @@
 import type { Session } from './types';
-import { demoRequest } from './demo';
 import { clearSavedReads, offlineAccount, offlineReadAction, savedRead, saveRead, updateSavedReads } from './offline';
 
 const KEY='hays.messages.session.v1';
@@ -7,12 +6,26 @@ export const backendUrl=(import.meta.env.VITE_APPS_SCRIPT_URL as string|undefine
 export const configured=/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(backendUrl);
 export class ApiError extends Error { constructor(message:string,public code:string){super(message);} }
 export function loadSession():Session|null {
-  try {const raw=localStorage.getItem(KEY);if(!raw)return null;const session=JSON.parse(raw) as Session;const expires=Date.parse(session.expiresAt);if(!session.token||!session.user?.email||!session.user?.name||!['admin','member'].includes(session.user.role)||!Number.isFinite(expires)||expires<=Date.now()||(!session.demo&&!configured))return null;return session;}catch{return null;}
+  try {
+    // Discard local preview data and sessions saved by earlier versions of the app.
+    localStorage.removeItem('hays.messages.demo.v1');
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith('hays.draft:you@hays.example:')) sessionStorage.removeItem(key);
+    }
+    const raw=localStorage.getItem(KEY);
+    if(!raw)return null;
+    const session=JSON.parse(raw) as Session & {demo?:unknown;backendUrl?:string};
+    const expires=Date.parse(session.expiresAt);
+    if(!configured||session.demo||session.token==='local-demo'||!session.token||!session.user?.email||!session.user?.name||!['admin','member'].includes(session.user.role)||!Number.isFinite(expires)||expires<=Date.now()||(session.backendUrl&&session.backendUrl!==backendUrl)) {
+      localStorage.removeItem(KEY);
+      return null;
+    }
+    return session;
+  }catch{return null;}
 }
-export function storeSession(session:Session|null) { try {if(session)localStorage.setItem(KEY,JSON.stringify(session));else localStorage.removeItem(KEY);}catch{/* Session still works in memory when browser storage is disabled. */} }
+export function storeSession(session:Session|null) { try {if(session)localStorage.setItem(KEY,JSON.stringify({...session,backendUrl}));else localStorage.removeItem(KEY);}catch{/* Session still works in memory when browser storage is disabled. */} }
 export async function request<T>(action:string,payload:Record<string,unknown>={},session:Session|null=null,signal?:AbortSignal):Promise<T> {
   if(signal?.aborted)throw new DOMException('Request cancelled','AbortError');
-  if(session?.demo)return demoRequest<T>(action,payload);
   if(!configured)throw new ApiError('The messaging backend has not been connected yet.','not_configured');
   const account=session?offlineAccount(session.user.email,backendUrl):'';
   async function cached():Promise<T|null> {

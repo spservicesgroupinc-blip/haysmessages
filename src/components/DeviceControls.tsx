@@ -32,7 +32,7 @@ export function DeviceControls({ session }: { session?: Session }) {
   const supported = typeof Notification !== 'undefined' && 'PushManager' in window && 'serviceWorker' in navigator && window.isSecureContext;
   const needsHomeScreen = pwa.isIOS && !pwa.standalone;
   useEffect(() => {
-    if (dialog !== 'notifications' || !session || session.demo || needsHomeScreen || !supported) return;
+    if (dialog !== 'notifications' || !session || needsHomeScreen || !supported) return;
     let cancelled = false;
     setBusy(true); setError(''); setConfig(null);
     async function load() {
@@ -97,7 +97,7 @@ export function DeviceControls({ session }: { session?: Session }) {
     </Modal>}
     {dialog === 'notifications' && <Modal title="Notifications on this device" onClose={() => setDialog(null)}>
       <p className="muted">Get a background alert for new team messages, even when the app is closed. Alerts keep message contents private. Device settings may affect when they arrive.</p>
-      {session?.demo ? <p className="notice">Demo conversations stay in this browser. Sign in to your company workspace to use push notifications.</p> : needsHomeScreen ? <><p className="notice">Add this app to your home screen and open it there to enable notifications on iPhone or iPad.</p><button className="button" onClick={() => setDialog('install')}><Download size={16} /> Installation instructions</button></> : !supported ? <p className="notice">Push notifications need a supported browser and a secure app address. Try the installed app in a current version of Chrome, Edge, Firefox, or Safari.</p> : <>
+      {needsHomeScreen ? <><p className="notice">Add this app to your home screen and open it there to enable notifications on iPhone or iPad.</p><button className="button" onClick={() => setDialog('install')}><Download size={16} /> Installation instructions</button></> : !supported ? <p className="notice">Push notifications need a supported browser and a secure app address. Try the installed app in a current version of Chrome, Edge, Firefox, or Safari.</p> : <>
         {busy && !config && <p className="notification-status"><Loader2 size={18} className="spin" /> Checking notification settings…</p>}
         {config && !config.enabled && <p className="notice">Push notifications have not been enabled for this workspace yet. Your administrator needs to finish the notification service setup.</p>}
         {config?.enabled && <div className="notification-status">{subscribed ? <><Bell size={19} /> Enabled on this device</> : <><BellOff size={19} /> Notifications are off</>}</div>}

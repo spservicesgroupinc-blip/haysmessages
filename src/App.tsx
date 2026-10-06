@@ -20,7 +20,7 @@ export default function App() {
   const sessionRef = useRef(session); sessionRef.current = session;
   const [notice, setNotice] = useState('');
   const changeSession = useCallback((next: Session | null) => {
-    if (!next && sessionRef.current && !sessionRef.current.demo) void clearSavedReads(offlineAccount(sessionRef.current.user.email, backendUrl));
+    if (!next && sessionRef.current) void clearSavedReads(offlineAccount(sessionRef.current.user.email, backendUrl));
     storeSession(next);
     setSession(next);
   }, []);
@@ -131,7 +131,7 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
       }
     }}>
       <div className="sidebar-brand"><BrandLogo size={32} sublabel="Team Messaging" tone="inverted" /><button className="icon-button mobile-only" aria-label="Close navigation" onClick={() => setMobileNav(false)}><X size={20} /></button></div>
-      <div className="workspace-label"><span className="workspace-dot" /> Hays + Sons workspace {session.demo && <span className="demo-tag">DEMO</span>}</div>
+      <div className="workspace-label"><span className="workspace-dot" /> Hays + Sons workspace</div>
       <button className="new-message button" onClick={() => setCreate('dm')}><Plus size={17} /> New conversation</button>
       <nav className="conversation-nav">
         {(['channel', 'group', 'dm'] as const).map(kind => <section className="nav-section" key={kind}>
@@ -147,7 +147,6 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
       <div className="sidebar-footer"><Avatar small name={user.name} /><div><strong>{user.name}</strong><span>{user.role === 'admin' ? 'Administrator' : 'Team member'}</span></div><button className="icon-button" disabled={loggingOut} aria-label="Sign out" title="Sign out" onClick={() => void logout()}>{loggingOut ? <Loader2 size={17} className="spin" /> : <LogOut size={17} />}</button></div>
     </aside>
     <main className="workspace-main" inert={!desktop && mobileNav}>
-      {session.demo && <div className="demo-banner"><span><span className="demo-tag">DEMO</span> Explore your team workspace. Changes are saved in this browser.</span></div>}
       {error && <div className="workspace-error" role="alert"><span>{error}</span><button className="text-button" onClick={() => setRefresh(n => n + 1)}>Retry</button></div>}
       {active ? <ConversationView key={active.id} conversation={active} title={conversationName(active, people, user.email)} people={people} user={user} api={api} onRead={markRead} onMenu={() => setMobileNav(true)} /> : <div className="workspace-empty"><button className="icon-button mobile-only" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu /></button>{!data ? <><Loader2 className="spin" /><h2>Loading your workspace</h2></> : <><MessageSquare size={36} /><h2>Welcome to your workspace</h2><p>Create a channel or message a teammate to get started.</p><button className="button primary" onClick={() => setCreate('channel')}>Create a channel</button></>}</div>}
     </main>

@@ -1,6 +1,6 @@
 # Hays + Sons Team Messaging
 
-React, TypeScript and Vite workspace for channels, direct and group messages, search, threads, reactions, unread counts, and message editing/deletion. The backend is a separate Google Apps Script project with its own Google spreadsheet. Demo mode saves conversations in browser storage and never sends demo messages to the company backend.
+React, TypeScript and Vite workspace for channels, direct and group messages, search, threads, reactions, unread counts, and message editing/deletion. The backend is a separate Google Apps Script project with its own Google spreadsheet. Company email is the username; Apps Script checks the password against the `Users` sheet and issues a 12-hour session. The app requires a company account and loads only that account's workspace data. Passwords are never stored in the frontend.
 
 ## Run locally
 
@@ -9,7 +9,9 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3001. Use **Explore demo workspace**, or sign in to the connected messaging backend. The supplied Apps Script URL is configured in the ignored `.env.local` file. Restart Vite after changing environment variables. The URL is public frontend configuration; never put passwords, invite codes, or admin secrets in `VITE_*` variables.
+Open http://localhost:3001 and sign in with your company email address and messaging password. If you do not have an account, choose **Create account** and use your administrator's company invite code. Account creation appears only when enabled by the backend. The supplied Apps Script URL is configured in the ignored `.env.local` file. Restart Vite after changing environment variables. The URL is public frontend configuration; never put passwords, invite codes, or admin secrets in `VITE_*` variables. An unconfigured app shows a disabled sign-in form and an administrator contact message.
+
+Local preview accounts, messages, banners, and the preview entry point have been removed. Existing preview sessions, data, and drafts are cleared when the updated app opens. A newly initialized backend starts with empty tables: create your first channel after signing in. Existing Sheet accounts and conversations remain available.
 
 ## Install on desktop or mobile
 
@@ -30,7 +32,7 @@ Updates are offered through an **Update app** banner and reload only after confi
 
 ## Offline behavior and notifications
 
-An installed or previously loaded production app can reload offline. Demo conversations remain fully local. For company accounts, IndexedDB saves only previously fetched workspace/message/thread reads, partitioned by backend and account. Successful edits/deletions/reactions update those saved reads. Offline access displays a clear banner; sending and account changes require connectivity, and failed sends preserve their drafts. Sign-out or session expiry clears the account's saved reads. Session tokens are not saved in the offline database or service-worker cache.
+An installed or previously loaded production app can reload offline. IndexedDB saves only previously fetched workspace/message/thread reads, partitioned by backend and account. Successful edits/deletions/reactions update those saved reads. Offline access displays a clear banner; signing in, sending, and account changes require connectivity, and failed sends preserve their drafts. Sign-out or session expiry clears the account's saved reads. Session tokens are not saved in the offline database or service-worker cache.
 
 The **Notifications** control explicitly opts a device in or out. Background delivery uses native encrypted Web Push, a separate Node sender, and an Apps Script queue/one-minute trigger. Browser polling is not used to send background alerts. Conversation membership, read receipts, active accounts, and session ownership are checked by the backend; alerts contain generic text, not message bodies. Follow [push-service/README.md](push-service/README.md) to configure the relay and update the dedicated messaging deployment. The supplied version-1 backend has not been modified, so live push remains unavailable until this setup is completed. The control reports that state rather than pretending notifications are enabled.
 
@@ -45,16 +47,18 @@ npm test
 npm run test:browser
 ```
 
-`lint` checks TypeScript. Backend tests run the actual `apps-script/Code.gs` with in-memory Google service mocks; root `npm test` also runs push queue and relay tests. Root `npm install` installs the push-service workspace dependency. Browser tests build the app, then cover desktop/mobile messaging, manifest/icons/install criteria, offline shell and saved messages, private-cache cleanup, explicit subscription controls, native service-worker notification display, notification navigation, and iPhone installation guidance. Tests use isolated Vite servers, production preview, and mocked live requests; they do not create company accounts or send messages/notifications to real users. The browser configuration uses installed Microsoft Edge; change `channel` in `playwright.config.ts` if using another browser. Physical iPhone installation and provider-to-device push delivery still require verification on the published HTTPS app.
+`lint` checks TypeScript. Backend tests run the actual `apps-script/Code.gs` with in-memory Google service doubles; root `npm test` also runs push queue and relay tests. Root `npm install` installs the push-service workspace dependency. Authentication and messaging browser tests route requests through the same `Code.gs` using isolated accounts and spreadsheets. They cover rejected passwords, email normalization, invite registration, sign-out, session expiry, old preview cleanup, empty workspace onboarding, and desktop/mobile messaging. PWA tests cover manifest/icons/install criteria, offline shell and saved messages, private-cache cleanup, explicit subscription controls, native service-worker notification display, notification navigation, and iPhone installation guidance. Tests do not create company accounts or send messages/notifications to real users. The browser configuration uses installed Microsoft Edge; change `channel` in `playwright.config.ts` if using another browser. Physical iPhone installation and provider-to-device push delivery still require verification on the published HTTPS app.
 
 ## Connect or update the messaging backend
 
 1. Use a **separate messaging Apps Script project**, not the document app's project. Copy `apps-script/Code.gs` and `apps-script/appsscript.json` into that project.
-2. Run `setupMessaging()` from the editor and approve its spreadsheet permissions. Running it again preserves existing messaging tables and messages. The spreadsheet ID and generated invite code are saved in Script Properties.
+2. Run `setupMessaging()` from the editor and approve its spreadsheet permissions. To use an existing messaging spreadsheet, set `MESSAGING_SPREADSHEET_ID` in Script Properties before running setup. Setup creates missing empty tables and preserves existing accounts, conversations, and messages; it never adds sample data. The spreadsheet ID and generated invite code are saved in Script Properties.
 3. To provision the first administrator, temporarily add an editor-only wrapper calling `createUser('your-company-email', 'Your name', 'your-chosen-password', 'admin')`, run the wrapper, then remove it. Use at least 10 password characters. `createUser` is not available through HTTP requests.
 4. Deploy a web app executing as **Me**, accessible to **Anyone**. App sessions control access to conversations. For an existing deployment, select **Manage deployments**, edit the messaging deployment, select a **new version**, and deploy to keep the same `/exec` URL. Editor changes alone do not update the deployed app.
 5. Set `VITE_APPS_SCRIPT_URL` in `.env.local` to the `/exec` URL. Copy `.env.example` if configuring a new checkout. Restart `npm run dev`, or rebuild for hosting.
-6. Confirm the public URL returns `Hays + Sons Team Messaging`. With this local backend deployed, its status reports version `3`. Sign in using a provisioned account, or create a member account with the invite code from Script Properties.
+6. Confirm the public URL returns `Hays + Sons Team Messaging`, version `4`, `configured: true`, and `usernameType: email`. Sign in using a provisioned account, or create a member account with the invite code from Script Properties. For a fresh spreadsheet, create your first channel from the workspace welcome screen.
+
+See [apps-script/README.md](apps-script/README.md) for the Users schema, first administrator setup, password resets, and a rollout checklist. Existing password hashes and account rows are compatible with this update. No new column or password migration is required.
 
 Optional Script Properties:
 
@@ -64,7 +68,7 @@ Optional Script Properties:
 | `REGISTRATION_CODE` | Invite code for new member accounts. |
 | `REGISTRATION_EMAIL_DOMAINS` | Comma-separated approved email domains; blank allows any domain with a valid invite. |
 
-The supplied live URL responded successfully to public status and registration checks on October 6, 2026 and reports backend version `1`, with invite-only registration enabled. This work does not alter that deployment. The frontend supports its original timestamp pagination and read-receipt responses. Deploy the updated local `Code.gs` for ID-based pagination that handles identical timestamps and preserves parent messages in busy threads. Authenticated live flows still require a company account or invite code.
+The updated live URL supplied on October 6, 2026 is configured in `.env.local` and `.env.example`. Public status and registration checks confirm backend version `4`, `configured: true`, `usernameType: email`, and invite-only registration. The frontend is connected to that deployment, and the production build embeds that URL. Set the same `VITE_APPS_SCRIPT_URL` in your hosting project's environment and rebuild when publishing. Authenticated live flows require a company account or invite code.
 
 ## Operation
 

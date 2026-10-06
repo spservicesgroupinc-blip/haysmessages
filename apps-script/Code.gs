@@ -2,7 +2,8 @@
  * Run setupMessaging() in the editor, create the first admin with createUser(),
  * then deploy a web app executing as Me, accessible to Anyone.
  * All data requests require an application session; registration is invite-only.
- * This project uses its own spreadsheet and accounts.
+ * Company email is the username. Passwords and session tokens are stored as hashes.
+ * Setup creates empty tables and preserves the existing spreadsheet and accounts.
  */
 var SCHEMA = {
   Users: ['Email','Name','Role','Salt','PasswordHash','Active','FailedAttempts','LockedUntil'],
@@ -32,11 +33,6 @@ function setupMessaging() {
     props.setProperty('MESSAGING_SPREADSHEET_ID', db.getId());
     if (!props.getProperty('REGISTRATION_MODE')) props.setProperty('REGISTRATION_MODE','invite');
     if (!props.getProperty('REGISTRATION_CODE')) props.setProperty('REGISTRATION_CODE',Utilities.getUuid());
-    if (!rows_(db.getSheetByName('Conversations')).length) {
-      [['general','Company-wide updates and everyday conversations.'],['sales','Leads, estimates, handoffs, and sales wins.'],['project-managers','Job progress, schedules, and field coordination.'],['office','Administration, billing, and office coordination.']].forEach(function(item) {
-        db.getSheetByName('Conversations').appendRow([Utilities.getUuid(),item[0],item[1],'channel','[]','SYSTEM',new Date().toISOString()]);
-      });
-    }
     Logger.log('Messaging database: ' + db.getUrl());
     Logger.log('Registration invite code is in Project Settings > Script Properties > REGISTRATION_CODE.');
     return {spreadsheetUrl:db.getUrl()};
@@ -48,7 +44,11 @@ function db_() {
   if (!id) fail_('not_configured','Run setupMessaging() in the Apps Script editor first.');
   return SpreadsheetApp.openById(id);
 }
-function sheet_(name) { return db_().getSheetByName(name); }
+function sheet_(name) {
+  var sheet=db_().getSheetByName(name);
+  if(!sheet && SCHEMA[name])fail_('not_configured','Run setupMessaging() in the Apps Script editor to create the messaging tables.');
+  return sheet;
+}
 function rows_(sheet) { var data = sheet.getDataRange().getValues(); return data.slice(1); }
 function fail_(code,message) { var err = new Error(message); err.code = code; throw err; }
 function json_(value) { return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON); }
@@ -72,6 +72,12 @@ function email_(value) {
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail_('bad_request','Enter a valid email.');
   return email;
 }
+// Keep the existing email payload compatible, and accept username from other clients.
+function accountEmail_(payload) {
+  var email=email_(payload.email===undefined ? payload.username : payload.email);
+  if(payload.username!==undefined && email_(payload.username)!==email)fail_('bad_request','Username must be your company email address.');
+  return email;
+}
 // Prevent user text from being interpreted as a spreadsheet formula.
 function cell_(value) { return /^[=+@-]/.test(String(value)) ? "'"+value : value; }
 function person_(row) { return {email:String(row[0]),name:String(row[1]),role:String(row[2])}; }
@@ -82,6 +88,22 @@ function createUser(email,name,password,role) {
   var lock=LockService.getScriptLock(); lock.waitLock(30000);
   try { return addUser_(email,name,password,role||'member'); }
   finally { lock.releaseLock(); }
+}
+/** Editor-only password reset. Existing sessions and notification access are revoked. */
+function resetUserPassword(email,password) {
+  var lock=LockService.getScriptLock();lock.waitLock(30000);
+  try {
+    email=email_(email);password=password_(password);
+    if(password.length<10)fail_('weak_password','Password must be at least 10 characters.');
+    var users=sheet_('Users'),records=rows_(users),index=records.findIndex(function(r){return r[0]===email;});
+    if(index<0)fail_('not_found','Account not found.');
+    var salt=Utilities.getUuid()+Utilities.getUuid();
+    users.getRange(index+2,4,1,2).setValues([[salt,hashPassword_(password,salt)]]);
+    users.getRange(index+2,7,1,2).setValues([[0,'']]);
+    var sessions=sheet_('Sessions'),existing=rows_(sessions);
+    for(var i=existing.length-1;i>=0;i--)if(existing[i][1]===email){revokePushSession_(existing[i][0]);sessions.deleteRow(i+2);}
+    return {ok:true};
+  } finally {lock.releaseLock();}
 }
 function addUser_(email,name,password,role) {
   email=email_(email); name=text_(name,80,'Name'); password=password_(password);
@@ -100,8 +122,8 @@ function session_(user) {
   return {token:token,expiresAt:expires,user:user};
 }
 function authenticate_(payload) {
-  if(!payload.sessionToken) fail_('unauthorized','Please sign in.');
-  var hash=digest_(String(payload.sessionToken));
+  if(typeof payload.sessionToken!=='string' || !payload.sessionToken || payload.sessionToken.length>200) fail_('unauthorized','Please sign in.');
+  var hash=digest_(payload.sessionToken);
   var session=rows_(sheet_('Sessions')).find(function(r){return equal_(r[0],hash) && new Date(r[2]).getTime()>Date.now();});
   if(!session) fail_('session_expired','Your session has expired. Please sign in again.');
   var user=activeUsers_().find(function(r){return r[0]===session[1];});
@@ -109,7 +131,7 @@ function authenticate_(payload) {
   return person_(user);
 }
 function login_(payload) {
-  var email=email_(payload.email), password=password_(payload.password);
+  var email=accountEmail_(payload), password=password_(payload.password);
   var sheet=sheet_('Users'), rows=rows_(sheet), index=rows.findIndex(function(r){return r[0]===email;});
   if(index<0) fail_('invalid_credentials','Incorrect email or password.');
   var row=rows[index];
@@ -124,8 +146,8 @@ function login_(payload) {
   return session_(person_(row));
 }
 function registrationInfo_() {
-  var props=PropertiesService.getScriptProperties(), mode=props.getProperty('REGISTRATION_MODE')||'invite';
-  return {enabled:mode!=='off',requiresInvite:mode==='invite',minPasswordLength:10};
+  var props=PropertiesService.getScriptProperties(), mode=(props.getProperty('REGISTRATION_MODE')||'invite').trim().toLowerCase();
+  return {enabled:mode==='invite'||mode==='open',requiresInvite:mode!=='open',minPasswordLength:10,usernameType:'email'};
 }
 function register_(payload) {
   var info=registrationInfo_(), props=PropertiesService.getScriptProperties();
@@ -133,7 +155,7 @@ function register_(payload) {
   var code=props.getProperty('REGISTRATION_CODE');
   if(info.requiresInvite && (!code || !equal_(String(payload.inviteCode||''),code))) fail_('invalid_invite_code','The invite code is incorrect.');
   var domains=(props.getProperty('REGISTRATION_EMAIL_DOMAINS')||'').split(',').map(function(d){return d.trim().toLowerCase();}).filter(Boolean);
-  var email=email_(payload.email);
+  var email=accountEmail_(payload);
   if(domains.length && domains.indexOf(email.split('@')[1])<0) fail_('domain_not_allowed','Use an approved company email address.');
   return session_(addUser_(email,payload.name,payload.password,'member'));
 }
@@ -272,13 +294,13 @@ function doPost(e) {
     var contents=e && e.postData && e.postData.contents;
     if(!contents || contents.length>25000)fail_('bad_request','Invalid request.');
     var payload=JSON.parse(contents);
-    if(!payload || typeof payload!=='object' || Array.isArray(payload))fail_('bad_request','Invalid request.');
+    if(!payload || typeof payload!=='object' || Array.isArray(payload) || typeof payload.action!=='string' || !payload.action || payload.action.length>50)fail_('bad_request','Invalid request.');
     if(MUTATIONS.indexOf(payload.action)>=0){var candidate=LockService.getScriptLock();candidate.waitLock(30000);lock=candidate;}
     return json_({ok:true,data:handle_(payload)});
   } catch(err) { return json_({ok:false,error:err.message||'Request failed.',code:err.code||'server_error'}); }
   finally {if(lock)lock.releaseLock();}
 }
-function doGet() { return json_({ok:true,data:{app:'Hays + Sons Team Messaging',version:3,features:['message-id-pagination','root-message-pages','web-push']}}); }
+function doGet() { return json_({ok:true,data:{app:'Hays + Sons Team Messaging',version:4,configured:!!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),usernameType:'email',features:['email-password-auth','empty-workspace-setup','message-id-pagination','root-message-pages','web-push']}}); }
 /** Run periodically from the editor or an Apps Script time trigger. */
 function cleanupSessions() {
   var lock=LockService.getScriptLock();lock.waitLock(30000);

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
 
-function backend() {
+function backend({ channels = true } = {}) {
   const properties = new Map(), sheets = new Map(), triggers = [], fetches = [];
   class Sheet {
     constructor() { this.data = []; }
@@ -30,6 +30,10 @@ function backend() {
     ContentService: { MimeType: { JSON: 'application/json' }, createTextOutput: value => ({ setMimeType: () => value }) }, Logger: { log: () => {} },
   });
   vm.runInContext(fs.readFileSync('apps-script/Code.gs', 'utf8'), context); context.setupMessaging();
+  // Test-only channels. Production setup creates empty tables.
+  if (channels) for (const name of ['general', 'sales']) {
+    context.createConversation_({kind: 'channel', name}, {email: 'test-setup@hays.test', name: 'Test setup', role: 'admin'});
+  }
   function call(action, payload = {}, session) { const result = JSON.parse(context.doPost({ postData: { contents: JSON.stringify({ ...payload, action, sessionToken: session?.token }) } })); assert.equal(locked, false); return result; }
   function ok(action, payload, session) { const result = call(action, payload, session); assert.equal(result.ok, true, JSON.stringify(result)); return result.data; }
   function user(email) { context.createUser(email, email.split('@')[0], 'correct password', 'member'); return ok('login', { email, password: 'correct password' }); }
@@ -61,6 +65,16 @@ test('push subscriptions validate provider and keys, bind sessions, and revoke o
   b.ok('logout', {}, a); assert.equal(b.sheets.get('PushSubscriptions').data.length, 1);
   b.subscribe(other); b.sheets.get('Sessions').data.find(r => r[1] === other.user.email)[2] = new Date(0).toISOString(); b.context.cleanupSessions();
   assert.equal(b.sheets.get('PushSubscriptions').data.length, 1);
+});
+
+test('an editor password reset revokes sessions and push only for the reset account', () => {
+  const b = backend(); b.setup(); const a = b.user('a@hays.test'), other = b.user('other@hays.test');
+  b.subscribe(a); b.subscribe(other);
+  b.context.resetUserPassword(a.user.email, 'replacement password');
+  assert.equal(b.call('session', {}, a).code, 'session_expired');
+  assert.equal(b.sheets.get('PushSubscriptions').data.length, 2);
+  assert.equal(b.sheets.get('PushSubscriptions').data[1][1], other.user.email);
+  assert.equal(b.ok('session', {}, other).user.email, other.user.email);
 });
 
 test('message retries queue once, exclude author and outsiders, suppress read and deleted messages', () => {
