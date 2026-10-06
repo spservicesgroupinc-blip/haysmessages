@@ -4,6 +4,8 @@ This optional Node service sends encrypted native Web Push notifications using `
 
 The frontend and relay require HTTPS in production. The relay should run behind HTTPS on a Node 22+ host. No deployment is performed by this repository.
 
+For **Vercel**, use the repository-root project and the included `api/push.mjs` function. Follow [VERCEL.md](../VERCEL.md), set the same environment variables in Vercel, and set the Apps Script relay URL to `https://YOUR-STABLE-DOMAIN/api/push`. `GET /api/push` is its health endpoint; no long-running Node server or separate hosting project is needed. The standalone server below remains available for other hosts.
+
 ## Configure the relay
 
 From `push-service`:

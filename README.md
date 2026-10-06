@@ -13,6 +13,8 @@ Open http://localhost:3001. Use **Explore demo workspace**, or sign in to the co
 
 ## Install on desktop or mobile
 
+For Vercel hosting, follow [VERCEL.md](VERCEL.md). The same project can host the frontend and `/api/push`; the standalone Node relay is optional.
+
 The production build is a Progressive Web App with a standalone manifest, desktop/Android PNG and maskable icons, an opaque Apple home-screen icon, and a service worker that saves the complete app shell. The **Install app** control appears on sign-in and in workspace navigation. Desktop Chrome/Edge and Android can use the native install prompt. On iPhone/iPad, open the HTTPS app in Safari and use **Share > Add to Home Screen**, then launch its home-screen icon.
 
 Use a production build to test installation and offline support:

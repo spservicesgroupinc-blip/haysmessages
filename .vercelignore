@@ -1,10 +1,11 @@
 node_modules/
 dist/
 .env*
-!.env.example
-*.log
+**/.env*
 test-results/
 playwright-report/
-.vercel/
+scripts/browser/
+scripts/*.test.cjs
+push-service/test/
+*.log
 artifacts/
-
