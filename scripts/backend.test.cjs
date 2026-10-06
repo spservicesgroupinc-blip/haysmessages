@@ -50,7 +50,7 @@ test('password resets are editor-only, retain accounts and revoke every session 
 test('public status reports the configured signup mode and disabled closes signup', () => {
   const b = backend();
   const status = JSON.parse(b.context.doGet()).data;
-  assert.equal(status.version, 8); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
+  assert.equal(status.version, 8.1); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
   assert.ok(status.features.includes('sales-aggregations'));
   b.properties.set('REGISTRATION_CODE', 'obsolete-code');
   b.properties.set('REGISTRATION_EMAIL_DOMAINS', 'company.test');

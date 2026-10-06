@@ -25,6 +25,15 @@ function backend({ channels = true, withoutPushEnqueue = false, salesRows = null
           return range;
         },
         setValue: value => range.setValues([[value]]),
+        clearContent: () => {
+          for (let i = 0; i < height; i++) {
+            const target = this.data[row - 1 + i];
+            if (!target) continue;
+            for (let j = 0; j < width; j++) target[column - 1 + j] = '';
+          }
+          while (this.data.length && this.data[this.data.length - 1].every(value => value === '' || value == null)) this.data.pop();
+          return range;
+        },
         setBackground: () => range, setFontColor: () => range, setFontWeight: () => range,
       };
       return range;

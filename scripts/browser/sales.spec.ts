@@ -55,7 +55,7 @@ test('sales dashboard explains an older deployment and can recover without showi
   };
   await page.route('https://script.google.com/**', oldBackend);
   await signIn(page); await openSales(page);
-  await expect(page.getByRole('alert')).toContainText('version 8');
+  await expect(page.getByRole('alert')).toContainText('version 8.1');
   await expect(page.getByRole('alert')).toContainText('latest Apps Script URL');
   await expect(page.locator('.sales-connection a')).toHaveAttribute('href', 'https://script.google.com/macros/s/browser-test/exec');
   await expect(page.locator('.sales-kpi')).toHaveCount(0);
@@ -81,5 +81,5 @@ test('a retired hosting URL connects login and sales to the current workspace', 
   await expect(page.getByRole('button', {name:'TEST-001'})).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(endpoints.length).toBeGreaterThan(0);
-  expect([...new Set(endpoints)]).toEqual(['https://script.google.com/macros/s/AKfycby6iwIDQQ9GvqdH_RC4HejRZCu-nU2WUiDyxjhMFFwNrCsuDiD4WLgcWqFJqdMkftdNtA/exec']);
+  expect([...new Set(endpoints)]).toEqual(['https://script.google.com/macros/s/AKfycbxOOS-5XQOPpc3skdOIZTKodi9G0EAyx9OAKpFKoL5bCXzh-fz0tFV2E07dhfJQgRFtiQ/exec']);
 });
