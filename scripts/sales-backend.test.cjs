@@ -39,7 +39,7 @@ test('sales schema follows column names, including when they move, and reports s
   assert.equal(b.call('salesDashboard', {}, user).code, 'sales_headers');
   b.salesSheet.data = [headers];
   assert.equal(b.ok('salesDashboard', {}, user).jobs.length, 0);
-  b.salesSheet.getLastRow = () => 20002;
+  b.salesSheet.getLastRow = () => 25001;
   assert.equal(b.call('salesDashboard', {}, user).code, 'sales_limit');
 });
 

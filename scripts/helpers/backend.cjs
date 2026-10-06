@@ -7,7 +7,8 @@ function backend({ channels = true, withoutPushEnqueue = false, salesRows = null
   const properties = new Map();
   const sheets = new Map();
   class Sheet {
-    constructor() { this.data = []; }
+    constructor(name = '') { this.name = name; this.data = []; }
+    getName() { return this.name; }
     appendRow(row) { this.data.push([...row]); return this; }
     getLastRow() { return this.data.length; }
     getLastColumn() { return Math.max(0, ...this.data.map(row => row.length)); }
@@ -16,16 +17,23 @@ function backend({ channels = true, withoutPushEnqueue = false, salesRows = null
     getRange(row, column, height = 1, width = 1) {
       const range = {
         getValues: () => Array.from({ length: height }, (_, i) => Array.from({ length: width }, (_, j) => this.data[row - 1 + i]?.[column - 1 + j] ?? '')),
-        setValues: values => { for (let i = 0; i < height; i++) for (let j = 0; j < width; j++) this.data[row - 1 + i][column - 1 + j] = values[i][j]; return range; },
+        setValues: values => {
+          for (let i = 0; i < height; i++) {
+            const target = this.data[row - 1 + i] ?? (this.data[row - 1 + i] = []);
+            for (let j = 0; j < width; j++) target[column - 1 + j] = values[i][j];
+          }
+          return range;
+        },
         setValue: value => range.setValues([[value]]),
         setBackground: () => range, setFontColor: () => range, setFontWeight: () => range,
       };
       return range;
     }
     setFrozenRows() {}
+    clearContents() { this.data = []; }
     deleteRow(row) { this.data.splice(row - 1, 1); }
   }
-  const db = { getSheetByName: name => sheets.get(name), insertSheet: name => { const sheet = new Sheet(); sheets.set(name, sheet); return sheet; }, getId: () => 'messaging-test-db', getUrl: () => 'https://example.test/messaging' };
+  const db = { getSheetByName: name => sheets.get(name), insertSheet: name => { const sheet = new Sheet(name); sheets.set(name, sheet); return sheet; }, getId: () => 'messaging-test-db', getUrl: () => 'https://example.test/messaging' };
   const salesSheet = new Sheet();
   if (salesRows) salesSheet.data = salesRows.map(row => [...row]);
   const salesDb = { getSheetByName: name => name === 'Estimator_Sales_Report.xls (6).csv' ? salesSheet : null, getName: () => 'Sales test report', getSpreadsheetTimeZone: () => 'America/Los_Angeles', getUrl: () => 'https://docs.google.com/spreadsheets/d/1Ba1IEJEOb3ILhsZrOZSHCOT5-6pELnwGT-inUcVMcTk/edit' };
@@ -55,9 +63,14 @@ function backend({ channels = true, withoutPushEnqueue = false, salesRows = null
   if (channels) for (const name of ['general', 'sales']) {
     context.createConversation_({kind: 'channel', name}, {email: 'test-setup@hays.test', name: 'Test setup', role: 'admin'});
   }
+  // Code.gs caches sheet reads for the lifetime of one execution. Every simulated
+  // request starts and ends with an empty cache, like a fresh Apps Script run.
+  function resetRequestCache() { if (typeof context.invalidateSheetCache_ === 'function') context.invalidateSheetCache_(); }
   function call(action, payload = {}, session) {
+    resetRequestCache();
     const result = JSON.parse(context.doPost({ postData: { contents: JSON.stringify({ ...payload, action, sessionToken: session?.token }) } }));
     assert.equal(locked, false, 'request must release its lock');
+    resetRequestCache();
     return result;
   }
   function ok(action, payload, session) { const result = call(action, payload, session); assert.equal(result.ok, true, JSON.stringify(result)); return result.data; }

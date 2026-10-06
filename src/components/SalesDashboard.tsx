@@ -36,7 +36,7 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
       if (stopped) return;
       setUnsupported(e instanceof ApiError && e.code === 'unknown_action');
       setError(e instanceof ApiError && e.code === 'unknown_action'
-        ? 'The connected workspace rejected the sales report request. If you already published Code.gs version 7, update the hosted app to your latest Apps Script URL and reload it. Otherwise, publish the complete updated Code.gs and retry.'
+        ? 'The connected workspace rejected the sales report request. If the hosted app still points at an older deployment, update it to the latest Apps Script URL and reload. Otherwise, publish the complete updated Code.gs (version 8) and retry.'
         : !navigator.onLine ? 'Connect to the internet and refresh to load the latest sales report.'
         : e instanceof Error ? e.message : 'The sales report could not be loaded. Try refreshing.');
     }).finally(() => { if (!stopped) setLoading(false); });

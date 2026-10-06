@@ -47,19 +47,23 @@ test('password resets are editor-only, retain accounts and revoke every session 
   assert.notEqual(updated[4], 'replacement password');
 });
 
-test('public status reports open signup and old registration restrictions cannot block signup', () => {
+test('public status reports the configured signup mode and disabled closes signup', () => {
   const b = backend();
   const status = JSON.parse(b.context.doGet()).data;
-  assert.equal(status.version, 7); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
-  assert.equal(status.registrationMode, 'open');
+  assert.equal(status.version, 8); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
+  assert.ok(status.features.includes('sales-aggregations'));
   b.properties.set('REGISTRATION_CODE', 'obsolete-code');
   b.properties.set('REGISTRATION_EMAIL_DOMAINS', 'company.test');
-  for (const mode of ['invalid', 'invite', 'off', 'open']) {
+  for (const [mode, requiresInvite] of [['invalid', false], ['invite', true], ['off', false], ['open', false]]) {
     b.properties.set('REGISTRATION_MODE', mode);
     assert.equal(b.ok('registrationInfo').enabled, true);
-    assert.equal(b.ok('registrationInfo').requiresInvite, false);
+    assert.equal(b.ok('registrationInfo').requiresInvite, requiresInvite);
+    assert.equal(b.ok('registrationInfo').registrationMode, mode);
     assert.ok(b.ok('register', { username: `${mode}@gmail.com`, name: 'New', password: 'correct password' }).token);
   }
+  b.properties.set('REGISTRATION_MODE', 'disabled');
+  assert.equal(b.ok('registrationInfo').enabled, false);
+  assert.equal(b.call('register', { email: 'closed@gmail.com', name: 'New', password: 'correct password' }).code, 'forbidden');
 });
 
 test('sessions require valid credentials and expire, deactivate and revoke correctly', () => {

@@ -7,18 +7,31 @@ const crypto = require('node:crypto');
 function backend({ channels = true } = {}) {
   const properties = new Map(), sheets = new Map(), triggers = [], fetches = [];
   class Sheet {
-    constructor() { this.data = []; }
+    constructor(name = '') { this.name = name; this.data = []; }
+    getName() { return this.name; }
     appendRow(row) { this.data.push([...row]); return this; }
     getLastRow() { return this.data.length; }
+    getLastColumn() { return Math.max(0, ...this.data.map(row => row.length)); }
     getDataRange() { return { getValues: () => this.data.map(row => [...row]) }; }
     getRange(row, column, height = 1, width = 1) {
-      const range = { setValues: values => { for (let i = 0; i < height; i++) for (let j = 0; j < width; j++) this.data[row - 1 + i][column - 1 + j] = values[i][j]; return range; }, setValue: value => range.setValues([[value]]), setBackground: () => range, setFontColor: () => range, setFontWeight: () => range };
+      const range = {
+        setValues: values => {
+          for (let i = 0; i < height; i++) {
+            const target = this.data[row - 1 + i] ?? (this.data[row - 1 + i] = []);
+            for (let j = 0; j < width; j++) target[column - 1 + j] = values[i][j];
+          }
+          return range;
+        },
+        setValue: value => range.setValues([[value]]),
+        setBackground: () => range, setFontColor: () => range, setFontWeight: () => range,
+      };
       return range;
     }
     setFrozenRows() {}
+    clearContents() { this.data = []; }
     deleteRow(row) { this.data.splice(row - 1, 1); }
   }
-  const db = { getSheetByName: name => sheets.get(name), insertSheet: name => { const sheet = new Sheet(); sheets.set(name, sheet); return sheet; }, getId: () => 'messaging-test-db', getUrl: () => 'https://example.test/messaging' };
+  const db = { getSheetByName: name => sheets.get(name), insertSheet: name => { const sheet = new Sheet(name); sheets.set(name, sheet); return sheet; }, getId: () => 'messaging-test-db', getUrl: () => 'https://example.test/messaging' };
   let locked = false, outcome = () => 'delivered';
   const context = vm.createContext({
     PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties.get(key) || null, setProperty: (key, value) => properties.set(key, value) }) },
@@ -34,7 +47,10 @@ function backend({ channels = true } = {}) {
   if (channels) for (const name of ['general', 'sales']) {
     context.createConversation_({kind: 'channel', name}, {email: 'test-setup@hays.test', name: 'Test setup', role: 'admin'});
   }
-  function call(action, payload = {}, session) { const result = JSON.parse(context.doPost({ postData: { contents: JSON.stringify({ ...payload, action, sessionToken: session?.token }) } })); assert.equal(locked, false); return result; }
+  // Code.gs caches sheet reads for the lifetime of one execution. Every simulated
+  // request starts and ends with an empty cache, like a fresh Apps Script run.
+  function resetRequestCache() { if (typeof context.invalidateSheetCache_ === 'function') context.invalidateSheetCache_(); }
+  function call(action, payload = {}, session) { resetRequestCache(); const result = JSON.parse(context.doPost({ postData: { contents: JSON.stringify({ ...payload, action, sessionToken: session?.token }) } })); assert.equal(locked, false); resetRequestCache(); return result; }
   function ok(action, payload, session) { const result = call(action, payload, session); assert.equal(result.ok, true, JSON.stringify(result)); return result.data; }
   function user(email) { context.createUser(email, email.split('@')[0], 'correct password', 'member'); return ok('login', { email, password: 'correct password' }); }
   function setup() { properties.set('VAPID_PUBLIC_KEY', 'B'.repeat(87)); properties.set('PUSH_RELAY_SECRET', 's'.repeat(64)); properties.set('PUSH_RELAY_URL', 'https://push.hays.test/push'); context.setupPushMessaging(); }
@@ -67,11 +83,13 @@ test('push subscriptions validate provider and keys, bind sessions, and revoke o
   assert.equal(b.sheets.get('PushSubscriptions').data.length, 1);
 });
 
-test('an editor password reset revokes sessions and push only for the reset account', () => {
+test('an editor password reset revokes sessions and push access only for the reset account', () => {
   const b = backend(); b.setup(); const a = b.user('a@hays.test'), other = b.user('other@hays.test');
   b.subscribe(a); b.subscribe(other);
   b.context.resetUserPassword(a.user.email, 'replacement password');
   assert.equal(b.call('session', {}, a).code, 'session_expired');
+  // The reset revokes sessions; the next prune removes only the reset account's subscriptions.
+  b.context.prunePushSubscriptions_();
   assert.equal(b.sheets.get('PushSubscriptions').data.length, 2);
   assert.equal(b.sheets.get('PushSubscriptions').data[1][1], other.user.email);
   assert.equal(b.ok('session', {}, other).user.email, other.user.email);

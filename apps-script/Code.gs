@@ -1,5 +1,5 @@
 /**
- * Hays + Sons Team Messaging - Enterprise Suite (Version 8)
+ * Hays + Sons Team Messaging - Enterprise Suite (Version 8.1 - Hardened)
  * 
  * SETUP INSTRUCTIONS:
  * 1. Deploy in an Apps Script project.
@@ -22,10 +22,12 @@ var PUSH_SCHEMA = {
 };
 
 var PASSWORD_ITERATIONS = 1500;
+
+// Note: uploadAttachment and heartbeat are excluded to prevent blocking database lockouts
 var MUTATIONS = [
   'login','register','logout','changePassword','updateProfile',
   'createConversation','leaveConversation','sendMessage','editMessage',
-  'deleteMessage','react','markRead','subscribePush','unsubscribePush','uploadAttachment'
+  'deleteMessage','react','markRead','subscribePush','unsubscribePush'
 ];
 
 // ============================================================================
@@ -47,13 +49,15 @@ function db_() {
 
 function sheet_(name) {
   var sheet = db_().getSheetByName(name);
-  if (!sheet && (SCHEMA[name] || PUSH_SCHEMA[name])) {
+  // Enforce mandatory SCHEMA tables only; optional push sheets return null gracefully
+  if (!sheet && SCHEMA[name]) {
     fail_('not_configured', 'Run setupMessaging() in the Apps Script editor to create the messaging tables.');
   }
   return sheet;
 }
 
 function rows_(sheet) {
+  if (!sheet) return [];
   var name = sheet.getName();
   if (REQUEST_CACHE_[name]) return REQUEST_CACHE_[name];
   var lastRow = sheet.getLastRow();
@@ -66,10 +70,12 @@ function rows_(sheet) {
   return data;
 }
 
-/** Atomic bulk cleanup to avoid slow row-by-row deletions that trigger timeouts. */
+/** Atomic bulk cleanup: overwrites valid rows in place and clears trailing dead rows */
 function bulkPruneSheet_(sheet, predicate) {
+  if (!sheet) return 0;
   var lastRow = sheet.getLastRow();
   if (lastRow <= 1) return 0;
+  
   var values = sheet.getDataRange().getValues();
   var headers = values[0];
   var remaining = [];
@@ -84,9 +90,11 @@ function bulkPruneSheet_(sheet, predicate) {
   }
   
   if (removed > 0) {
-    sheet.clearContents();
     var payload = [headers].concat(remaining);
     sheet.getRange(1, 1, payload.length, headers.length).setValues(payload);
+    if (values.length > payload.length) {
+      sheet.getRange(payload.length + 1, 1, values.length - payload.length, headers.length).clearContent();
+    }
     invalidateSheetCache_(sheet.getName());
   }
   return removed;
@@ -106,6 +114,14 @@ function setupMessaging() {
         sheet.appendRow(SCHEMA[name]);
         sheet.getRange(1, 1, 1, SCHEMA[name].length).setBackground('#dc2626').setFontColor('#ffffff').setFontWeight('bold');
         sheet.setFrozenRows(1);
+      } else {
+        // Automatic column schema migration for existing deployments
+        var existingCols = sheet.getLastColumn();
+        if (existingCols < SCHEMA[name].length) {
+          for (var c = existingCols; c < SCHEMA[name].length; c++) {
+            sheet.getRange(1, c + 1).setValue(SCHEMA[name][c]).setBackground('#dc2626').setFontColor('#ffffff').setFontWeight('bold');
+          }
+        }
       }
     });
     
@@ -141,7 +157,6 @@ function hashPassword_(password, salt) {
   return hash;
 }
 
-/** Constant-time string comparison against timing attacks */
 function equal_(a, b) {
   a = String(a); b = String(b);
   var diff = a.length ^ b.length;
@@ -179,7 +194,6 @@ function accountEmail_(payload) {
   return email;
 }
 
-/** Hardened formula injection protection */
 function cell_(value) {
   if (value == null) return '';
   var str = String(value);
@@ -252,7 +266,6 @@ function resetUserPassword(email, password) {
     users.getRange(index + 2, 7, 1, 2).setValues([[0, '']]);
     invalidateSheetCache_('Users');
     
-    // Revoke sessions
     bulkPruneSheet_(sheet_('Sessions'), function(r) { return r[1] !== email; });
     return { ok: true };
   } finally { lock.releaseLock(); }
@@ -353,6 +366,13 @@ function changePassword_(payload, user) {
   var salt = Utilities.getUuid() + Utilities.getUuid();
   sheet.getRange(index + 2, 4, 1, 2).setValues([[salt, hashPassword_(newPass, salt)]]);
   invalidateSheetCache_('Users');
+  
+  // Revoke other active sessions for security while preserving the current active session
+  var currentHash = digest_(payload.sessionToken);
+  bulkPruneSheet_(sheet_('Sessions'), function(r) {
+    return r[1] !== user.email || equal_(r[0], currentHash);
+  });
+  
   return { ok: true, message: 'Password updated successfully.' };
 }
 
@@ -425,7 +445,6 @@ function bootstrap_(user) {
   var byId = Object.create(null);
   convos.forEach(function(c) { byId[c.id] = c; });
   
-  // Single pass calculation of unread & last activity
   rows_(sheet_('Messages')).forEach(function(r) {
     var c = byId[String(r[1])];
     if (!c) return;
@@ -446,7 +465,8 @@ function createConversation_(payload, user) {
   var kind = payload.kind;
   if (['channel', 'group', 'dm'].indexOf(kind) < 0) fail_('bad_request', 'Invalid conversation type.');
   
-  var name = text_(payload.name, 80, 'Conversation name');
+  // Safe default naming for Direct Messages
+  var name = (kind === 'dm' && !payload.name) ? 'Direct Message' : text_(payload.name, 80, 'Conversation name');
   var description = typeof payload.description === 'string' ? payload.description.trim().slice(0, 300) : '';
   
   if (kind !== 'channel' && (!Array.isArray(payload.members) || payload.members.some(function(e) { return typeof e !== 'string'; }))) {
@@ -668,9 +688,14 @@ function getUploadsFolder_() {
 }
 
 function uploadAttachment_(payload, user) {
-  var base64 = text_(payload.base64, 15000000, 'Base64 data'); // Max ~10MB
+  var base64 = text_(payload.base64, 15000000, 'Base64 data');
   var fileName = text_(payload.fileName, 255, 'Filename');
   var mimeType = text_(payload.mimeType, 100, 'MIME type');
+  
+  // Safely strip standard browser Data URI scheme prefix if present
+  if (base64.indexOf(',') >= 0) {
+    base64 = base64.split(',')[1];
+  }
   
   var decoded = Utilities.base64Decode(base64);
   var blob = Utilities.newBlob(decoded, mimeType, fileName);
@@ -690,7 +715,7 @@ function uploadAttachment_(payload, user) {
 }
 
 // ============================================================================
-// 6. REAL-TIME PRESENCE (CacheService: Zero sheet overhead)
+// 6. REAL-TIME PRESENCE (High-speed batch CacheService)
 // ============================================================================
 
 function heartbeat_(user) {
@@ -702,9 +727,11 @@ function heartbeat_(user) {
 function getPresence_() {
   var cache = CacheService.getScriptCache();
   var users = activeUsers_();
+  var keys = users.map(function(u) { return 'presence_' + u[0]; });
+  var cached = cache.getAll(keys); // Single network call
   var online = [];
   users.forEach(function(u) {
-    if (cache.get('presence_' + u[0])) online.push(u[0]);
+    if (cached['presence_' + u[0]]) online.push(u[0]);
   });
   return { onlineEmails: online };
 }
@@ -775,7 +802,11 @@ function salesDashboard_(payload) {
     var division = text(field(row, 'Division'));
     var estimator = text(field(row, 'Estimator'));
     
-    // Aggregations
+    // Apply filters BEFORE accumulating aggregations so metrics reflect the filtered dataset
+    if (payload.division && division.toLowerCase() !== payload.division.toLowerCase()) continue;
+    if (payload.status && status.toLowerCase() !== payload.status.toLowerCase()) continue;
+    if (payload.estimator && estimator.toLowerCase() !== payload.estimator.toLowerCase()) continue;
+    
     if (estimate != null) {
       totalEstimatedSum += estimate;
       validEstimateCount++;
@@ -783,11 +814,6 @@ function salesDashboard_(payload) {
     if (status) statusBreakdown[status] = (statusBreakdown[status] || 0) + 1;
     if (division) divisionBreakdown[division] = (divisionBreakdown[division] || 0) + 1;
     if (estimator) estimatorBreakdown[estimator] = (estimatorBreakdown[estimator] || 0) + 1;
-    
-    // Optional filtering for bandwidth optimization
-    if (payload.division && division.toLowerCase() !== payload.division.toLowerCase()) continue;
-    if (payload.status && status.toLowerCase() !== payload.status.toLowerCase()) continue;
-    if (payload.estimator && estimator.toLowerCase() !== payload.estimator.toLowerCase()) continue;
     
     jobs.push({
       id: 'sales-row-' + (index + 2),
@@ -810,7 +836,6 @@ function salesDashboard_(payload) {
     });
   }
   
-  // Pagination
   var totalMatching = jobs.length;
   if (payload.limit) {
     var lim = Math.max(1, Math.min(2000, Number(payload.limit)));
@@ -1006,13 +1031,13 @@ function unsubscribePush_(payload, user) {
 }
 
 function revokePushSession_(hash) {
-  var sheet = sheet_('PushSubscriptions');
+  var sheet = db_().getSheetByName('PushSubscriptions');
   if (!sheet) return;
   bulkPruneSheet_(sheet, function(r) { return !equal_(r[2], hash); });
 }
 
 function prunePushSubscriptions_() {
-  var sheet = sheet_('PushSubscriptions');
+  var sheet = db_().getSheetByName('PushSubscriptions');
   if (!sheet) return;
   var sessions = rows_(sheet_('Sessions'));
   var users = activeUsers_();
@@ -1029,8 +1054,11 @@ function prunePushSubscriptions_() {
 
 function enqueuePush_(messageRow) {
   try {
-    var queue = sheet_('PushQueue'), subscriptions = sheet_('PushSubscriptions');
+    var db = db_();
+    var queue = db.getSheetByName('PushQueue');
+    var subscriptions = db.getSheetByName('PushSubscriptions');
     if (!queue || !subscriptions) return;
+    
     var convoRow = rows_(sheet_('Conversations')).find(function(r) { return r[0] === messageRow[1]; });
     if (!convoRow) return;
     
@@ -1236,7 +1264,7 @@ function doPost(e) {
       fail_('bad_request', 'Invalid payload structure.');
     }
     
-    // Acquire concurrency lock only on write operations
+    // Acquire concurrency lock only on database mutations
     if (MUTATIONS.indexOf(payload.action) >= 0) {
       var candidate = LockService.getScriptLock();
       try { candidate.waitLock(30000); }
@@ -1262,7 +1290,7 @@ function doGet() {
     ok: true,
     data: {
       app: 'Hays + Sons Team Messaging',
-      version: 8,
+      version: 8.1,
       configured: !!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),
       usernameType: 'email',
       features: [
