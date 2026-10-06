@@ -1,12 +1,9 @@
 import type { Session } from './types';
 import { clearSavedReads, offlineAccount, offlineReadAction, savedRead, saveRead, updateSavedReads } from './offline';
+import { deploymentUrl, resolveBackendUrl } from './connection';
 
 const KEY='hays.messages.session.v1';
-// This is public connection information. Production builds work without an env file.
-const defaultBackendUrl='https://script.google.com/macros/s/AKfycbzELGedeAMQlprPvnwy5JkXSicGt7XBRE7AC0dujZ52QP7Zh67CpKly5Nco-ysMGPqCKA/exec';
-const deploymentUrl=/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/;
-const environmentUrl=(import.meta.env.VITE_APPS_SCRIPT_URL as string|undefined)?.trim()||'';
-export const backendUrl=deploymentUrl.test(environmentUrl)?environmentUrl:defaultBackendUrl;
+export const backendUrl=resolveBackendUrl(import.meta.env.VITE_APPS_SCRIPT_URL as string|undefined);
 export const configured=deploymentUrl.test(backendUrl);
 export class ApiError extends Error { constructor(message:string,public code:string){super(message);} }
 export function loadSession():Session|null {

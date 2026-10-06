@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowUpRight, BarChart3, CalendarDays, CircleDollarSign, ClipboardList, Clock3, ExternalLink, Filter, Loader2, Menu, RefreshCw, Search } from 'lucide-react';
 import { Modal } from './Modal';
-import { ApiError } from '../lib/api';
+import { ApiError, backendUrl } from '../lib/api';
 import type { ApiCall } from '../lib/useMessages';
 import { ageDays, agingTotals, emptySalesFilters, estimatorTotals, filterSales, plainJournal, salesSummary, type SalesFilters, type SalesJob, type SalesReport } from '../lib/sales';
 import './sales.css';
@@ -15,6 +15,7 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
   const [report, setReport] = useState<SalesReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [unsupported, setUnsupported] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [filters, setFilters] = useState<SalesFilters>(emptySalesFilters);
   const [sort, setSort] = useState('newest');
@@ -23,13 +24,14 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
   useEffect(() => {
     let stopped = false;
     const controller = new AbortController();
-    setLoading(true); setError('');
+    setLoading(true); setError(''); setUnsupported(false);
     void api<SalesReport>('salesDashboard', {}, controller.signal).then(next => {
       if (!stopped) { setReport(next); setPage(0); }
     }).catch(e => {
       if (stopped) return;
+      setUnsupported(e instanceof ApiError && e.code === 'unknown_action');
       setError(e instanceof ApiError && e.code === 'unknown_action'
-        ? 'The sales dashboard is ready in the app. Publish the updated messaging Code.gs (version 7) to connect this report.'
+        ? 'The connected workspace rejected the sales report request. If you already published Code.gs version 7, update the hosted app to your latest Apps Script URL and reload it. Otherwise, publish the complete updated Code.gs and retry.'
         : !navigator.onLine ? 'Connect to the internet and refresh to load the latest sales report.'
         : e instanceof Error ? e.message : 'The sales report could not be loaded. Try refreshing.');
     }).finally(() => { if (!stopped) setLoading(false); });
@@ -58,6 +60,7 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
     </header>
     <div className="sales-body">
       {error && <div className="error sales-load-error" role="alert">{error} <button className="text-button" disabled={loading} onClick={() => setRefresh(n => n + 1)}>Retry</button></div>}
+      {unsupported && <div className="notice sales-connection"><strong>Connected workspace</strong><a href={backendUrl} target="_blank" rel="noreferrer">{backendUrl}<ExternalLink size={13} /></a><p>This must be your latest deployment address. A version label alone does not verify that the sales request is implemented.</p></div>}
       {report && <div className="sales-source"><span><span className={`sales-source-dot ${error ? 'stale' : ''}`} />{error ? 'Showing last loaded report' : 'Connected to Google Sheets'}<span className="sales-updated"> · Loaded {new Date(report.fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></span><a href={sourceUrl(report)} target="_blank" rel="noreferrer">Open source sheet <ExternalLink size={13} /></a></div>}
       {loading && !report ? <div className="sales-empty" role="status"><Loader2 size={28} className="spin" /><h2>Loading your sales report</h2><p>Reading the latest jobs from your connected sheet.</p></div> : !report ? <div className="sales-empty"><BarChart3 size={36} /><h2>Connect your sales report</h2><p>The dashboard uses your existing sign-in and the supplied sales spreadsheet.</p><a className="button" href="https://docs.google.com/spreadsheets/d/1Ba1IEJEOb3ILhsZrOZSHCOT5-6pELnwGT-inUcVMcTk/edit" target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open sales sheet</a></div> : <>
         <div className="sales-filters" aria-label="Sales filters">

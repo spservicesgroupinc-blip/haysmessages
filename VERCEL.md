@@ -24,6 +24,8 @@ Set these under Vercel Project > Settings > Environment Variables. Apply them to
 
 The frontend now defaults to the supplied messaging URL in [.env.example](.env.example), so a missing or blank `VITE_APPS_SCRIPT_URL` does not disable signup or sign-in. Set that variable only to override the endpoint. The updated connected backend reports version `7` with the sales dashboard, open signup for any email without invitations, and optional notifications that cannot fail saved messages. If your existing Vercel project has a previous `VITE_APPS_SCRIPT_URL`, replace it with the current URL below before publishing the updated build.
 
+The current build also migrates the three known retired company deployment overrides to the latest URL. This prevents a stale hosting setting from sending login and sales to an older backend after a frontend update. New intentional deployment overrides are preserved. Publish the updated frontend to apply this behavior; an already published bundle is unchanged by editing local files. The sales error displays the connected URL for checking which deployment answered.
+
 | Variable | Value / handling |
 | --- | --- |
 | `VITE_APPS_SCRIPT_URL` | `https://script.google.com/macros/s/AKfycbzELGedeAMQlprPvnwy5JkXSicGt7XBRE7AC0dujZ52QP7Zh67CpKly5Nco-ysMGPqCKA/exec` |

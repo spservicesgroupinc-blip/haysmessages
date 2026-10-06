@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { createRequire } from 'node:module';
-import { connectWorkspace, signIn } from './workspace';
+import { account, connectWorkspace, signIn } from './workspace';
 const require = createRequire(import.meta.url);
 const { salesRows } = require('../helpers/sales.cjs');
 async function openSales(page: Page) {
@@ -56,9 +56,30 @@ test('sales dashboard explains an older deployment and can recover without showi
   await page.route('https://script.google.com/**', oldBackend);
   await signIn(page); await openSales(page);
   await expect(page.getByRole('alert')).toContainText('version 7');
+  await expect(page.getByRole('alert')).toContainText('latest Apps Script URL');
+  await expect(page.locator('.sales-connection a')).toHaveAttribute('href', 'https://script.google.com/macros/s/browser-test/exec');
   await expect(page.locator('.sales-kpi')).toHaveCount(0);
   await page.unroute('https://script.google.com/**', oldBackend);
   await page.getByRole('button', {name:'Retry',exact:true}).click();
   await expect(page.getByRole('button', {name:'TEST-001'})).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.locator('.sales-connection')).toHaveCount(0);
+});
+
+test('a retired hosting URL connects login and sales to the current workspace', async ({ page }) => {
+  await connectWorkspace(page, { salesRows });
+  const endpoints: string[] = [];
+  page.on('request', request => { if (request.url().startsWith('https://script.google.com/')) endpoints.push(request.url()); });
+  await page.addInitScript(() => localStorage.setItem('hays.messages.session.v1', JSON.stringify({ token: 'old-deployment-session', backendUrl: 'https://script.google.com/macros/s/AKfycbzcbutQRzBUyaY9tzR46tl3xGKFiG1hOOjl_u60oHg8EbkWwFQP9quxrFYoaKYiP1m41g/exec', expiresAt: new Date(Date.now() + 3600000).toISOString(), user: { email: 'browser@hays.test', name: 'Test teammate', role: 'admin' } })));
+  await page.goto('http://localhost:3004');
+  await expect(page.getByRole('heading', { name:'Sign in to your workspace.' })).toBeVisible();
+  await page.getByRole('textbox', {name:'Username',exact:true}).fill(account.email);
+  await page.getByLabel('Password', {exact:true}).fill(account.password);
+  await page.getByRole('form', {name:'Company sign in'}).getByRole('button', {name:'Sign in',exact:true}).click();
+  await expect(page.getByRole('heading', {name:'general',exact:true})).toBeVisible();
+  await openSales(page);
+  await expect(page.getByRole('button', {name:'TEST-001'})).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(endpoints.length).toBeGreaterThan(0);
+  expect([...new Set(endpoints)]).toEqual(['https://script.google.com/macros/s/AKfycbzELGedeAMQlprPvnwy5JkXSicGt7XBRE7AC0dujZ52QP7Zh67CpKly5Nco-ysMGPqCKA/exec']);
 });
