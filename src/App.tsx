@@ -193,7 +193,7 @@ function ConversationView({ conversation, title, people, user, api, onRead, onMe
   const [query, setQuery] = useState('');
   const [thread, setThread] = useState('');
   const [details, setDetails] = useState(false);
-  const feed = useMessages(api, conversation.id, query, onRead);
+  const feed = useMessages(api, conversation.id, query, onRead, user);
   const draftKey = `${user.email}:${conversation.id}`;
   const members = conversation.kind === 'channel' ? people : people.filter(p => conversation.members.includes(p.email));
   return <div className="conversation-view">
@@ -231,7 +231,22 @@ function ThreadPanel({ parentId, conversationId, user, api, onClose, onUpdate }:
     return () => { stopped = true; controller.abort(); window.clearTimeout(timer); };
   }, [api, parentId, conversationId, refresh]);
   function update(message: Message) { revision.current++; setMessages(old => mergeMessages(old, [message])); updateRef.current([message]); }
-  async function send(body: string, clientId: string) { revision.current++; update(await api<Message>('sendMessage', { conversationId, parentId, body, clientId })); }
+  async function send(body: string, clientId: string) {
+    revision.current++;
+    // Replies follow the same optimistic rule as the main composer: render
+    // instantly, then settle against the server confirmation.
+    const optimistic: Message = { id: `pending:${clientId}`, conversationId, authorEmail: user.email, authorName: user.name, body, createdAt: new Date().toISOString(), updatedAt: '', deleted: false, parentId, reactions: {}, clientId, pending: 'sending' };
+    setMessages(old => mergeMessages(old, [optimistic]));
+    try {
+      const message = await api<Message>('sendMessage', { conversationId, parentId, body, clientId });
+      revision.current++;
+      setMessages(old => mergeMessages(old.filter(m => m.id !== optimistic.id), [message]));
+      updateRef.current([message]);
+    } catch (error) {
+      setMessages(old => old.filter(m => m.id !== optimistic.id));
+      throw error;
+    }
+  }
   async function mutate(action: string, message: Message, value?: string) { revision.current++; update(await api<Message>(action, { messageId: message.id, body: value, emoji: value })); }
   const parent = messages.find(m => m.id === parentId);
   return <aside className="thread-panel" aria-label="Message thread"><div className="thread-heading"><h2>Thread</h2><button className="icon-button" aria-label="Close thread" onClick={onClose}><X size={20} /></button></div><div className="thread-messages">

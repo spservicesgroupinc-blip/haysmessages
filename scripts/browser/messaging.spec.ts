@@ -32,7 +32,7 @@ test('a missing notification module does not fail sending or retain a sent draft
   await page.getByRole('complementary', { name: 'Message thread' }).getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(reply).toHaveValue('');
   await expect(page.getByText('Reply saved without notification module', { exact: true })).toBeVisible();
-  expect(server.sheets.get('Messages').data).toHaveLength(3);
+  await expect.poll(() => server.sheets.get('Messages').data.length).toBe(3);
 });
 
 test('authenticated workspace sends, edits, reacts, replies, searches, deletes and persists messages', async ({ page }, info) => {
@@ -155,13 +155,51 @@ test('configured login preserves failed-send draft, retries the same identifier 
   await expect(composer).toHaveValue('Retry without duplication');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(composer).toHaveValue('');
-  expect(identifiers).toHaveLength(2); expect(identifiers[0]).toBe(identifiers[1]);
+  await expect.poll(() => identifiers.length).toBe(2); expect(identifiers[0]).toBe(identifiers[1]);
   await expect(page.locator('article').filter({ hasText: 'Retry without duplication' })).toHaveCount(1);
   expired = true;
   await composer.fill('Expired session');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(page.locator('form').getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
   await expect(page.getByRole('status')).toContainText('Your session has expired');
+});
+
+test('sent messages render instantly while the backend request is still in flight', async ({ page }) => {
+  const user = { email: 'instant@hays.test', name: 'Instant teammate', role: 'member' };
+  const session = { token: 'instant-session', expiresAt: new Date(Date.now() + 3600000).toISOString(), user };
+  const conversation = { id: 'general', name: 'general', description: 'Company updates', kind: 'channel', members: [], createdBy: 'SYSTEM', createdAt: new Date().toISOString(), lastActivity: new Date().toISOString(), unread: 0 };
+  const messages: Record<string, unknown>[] = [];
+  let releaseSend: () => void = () => {};
+  const gate = new Promise<void>(resolve => { releaseSend = resolve; });
+  await page.route('https://script.google.com/**', async route => {
+    const body = route.request().postDataJSON(); let data: unknown;
+    switch (body.action) {
+      case 'registrationInfo': data = { enabled: true, requiresInvite: false, minPasswordLength: 10 }; break;
+      case 'login': data = session; break;
+      case 'bootstrap': data = { user, people: [user], conversations: [conversation] }; break;
+      case 'listMessages': data = { messages, hasMore: false, nextBeforeId: '', readThrough: '' }; break;
+      case 'markRead': case 'logout': data = { ok: true }; break;
+      case 'sendMessage': {
+        await gate;
+        const message = { id: 'confirmed', conversationId: 'general', authorEmail: user.email, authorName: user.name, body: body.body, createdAt: new Date().toISOString(), updatedAt: '', deleted: false, parentId: '', reactions: {}, clientId: body.clientId };
+        messages.push(message); data = message; break;
+      }
+      default: throw new Error(`Unexpected action ${body.action}`);
+    }
+    await route.fulfill({ json: { ok: true, data } });
+  });
+  await page.addInitScript(value => localStorage.setItem('hays.messages.session.v1', JSON.stringify(value)), session);
+  await page.goto('http://localhost:3002');
+  await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
+  const composer = page.getByRole('textbox', { name: 'Message #general' });
+  await composer.fill('Instant team update');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  // The bubble and the cleared, still-usable composer must not wait for the slow backend response.
+  await expect(page.locator('article').filter({ hasText: 'Instant team update' })).toBeVisible();
+  await expect(composer).toHaveValue('');
+  await expect(composer).toBeEnabled();
+  releaseSend();
+  await expect(page.locator('article').filter({ hasText: 'Instant team update' })).toHaveCount(1);
 });
 
 test('ignores stale conversation responses and supports the original deployed pagination API', async ({ page }) => {
