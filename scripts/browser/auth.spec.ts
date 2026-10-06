@@ -1,14 +1,28 @@
 import { test, expect } from '@playwright/test';
 import { account, connectWorkspace } from './workspace';
 
-test('requires a company account and disables sign-in when no backend is configured', async ({ page }) => {
+test('an empty environment URL uses the default Apps Script connection and allows signup', async ({ page }, info) => {
+  const server = await connectWorkspace(page);
+  const endpoints: string[] = [];
+  page.on('request', request => { if (request.url().startsWith('https://script.google.com/')) endpoints.push(request.url()); });
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Sign in to your workspace.' })).toBeVisible();
-  await expect(page.getByRole('alert')).toContainText('Contact your administrator');
-  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeDisabled();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeEnabled();
+  await expect(page.getByRole('textbox', { name: 'Username', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Create account', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /demo/i })).toHaveCount(0);
   await expect(page.locator('.app-shell')).toHaveCount(0);
+  await page.screenshot({ path: `test-results/${info.project.name}-default-connection-login.png`, fullPage: true });
+  await page.getByRole('button', { name: 'Create account', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Your name' }).fill('New teammate');
+  await page.getByRole('textbox', { name: 'Username', exact: true }).fill('first.signup@gmail.com');
+  await page.getByLabel('Password', { exact: true }).fill('new member password');
+  await expect(page.getByRole('textbox', { name: /invite/i })).toHaveCount(0);
+  await page.getByRole('form', { name: 'Create company account' }).getByRole('button', { name: 'Create account', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
+  expect(server.sheets.get('Users').data.some((row: unknown[]) => row[0] === 'first.signup@gmail.com')).toBe(true);
+  expect(endpoints).toContain('https://script.google.com/macros/s/AKfycbwkB2KIrVF3i3ZNM7TmFCUF1QkKWkJRj8aljoo-Stwz_ihD5eSfzUaec0t_pe4zCFrT5w/exec');
 });
 
 test('removes old preview data and never restores a demo session', async ({ page }) => {
@@ -57,21 +71,18 @@ test('authenticates email and password through Apps Script, rejects wrong passwo
   await page.screenshot({ path: `test-results/${info.project.name}-login.png`, fullPage: true });
 });
 
-test('creates a Sheet-backed member account only with a valid invite', async ({ page }) => {
+test('any email can create a Sheet-backed member account without an invite', async ({ page }) => {
   const server = await connectWorkspace(page);
   await page.goto('http://localhost:3002');
   await page.getByRole('button', { name: 'Create account', exact: true }).click();
   await page.getByRole('textbox', { name: 'Your name' }).fill('New teammate');
-  await page.getByRole('textbox', { name: 'Username', exact: true }).fill('new@hays.test');
+  await page.getByRole('textbox', { name: 'Username', exact: true }).fill('new.member@outlook.com');
   await page.getByLabel('Password', { exact: true }).fill('new member password');
-  await page.getByRole('textbox', { name: 'Company invite code' }).fill('incorrect invite');
+  await expect(page.getByRole('textbox', { name: /invite/i })).toHaveCount(0);
   const submit = page.getByRole('form', { name: 'Create company account' }).getByRole('button', { name: 'Create account', exact: true });
   await submit.click();
-  await expect(page.getByRole('alert')).toContainText('invite code is incorrect');
-  await page.getByRole('textbox', { name: 'Company invite code' }).fill(server.properties.get('REGISTRATION_CODE'));
-  await submit.click();
   await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
-  const row = server.sheets.get('Users').data.find((value: unknown[]) => value[0] === 'new@hays.test');
+  const row = server.sheets.get('Users').data.find((value: unknown[]) => value[0] === 'new.member@outlook.com');
   expect(row[2]).toBe('member');
   expect(row[4]).not.toBe('new member password');
 });
@@ -89,13 +100,12 @@ test('existing accounts can sign in when account discovery is unavailable', asyn
   await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
 });
 
-test('Create account stays visible while settings load and when discovery reports disabled', async ({ page }, info) => {
+test('Create account opens without waiting for registration settings', async ({ page }, info) => {
   await connectWorkspace(page);
-  let releaseSettings: () => void = () => {};
-  const settingsGate = new Promise<void>(resolve => { releaseSettings = resolve; });
+  let discoveryRequests = 0;
   await page.route('https://script.google.com/**', async route => {
     if (route.request().postDataJSON().action === 'registrationInfo') {
-      await settingsGate;
+      discoveryRequests++;
       await route.fulfill({ json: { ok: true, data: { enabled: false, requiresInvite: true, minPasswordLength: 10 } } });
     } else await route.fallback();
   });
@@ -105,29 +115,25 @@ test('Create account stays visible while settings load and when discovery report
   await page.getByRole('button', { name: 'Create account', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Join your team.' })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Your name' })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'Company invite code' })).toBeVisible();
-  releaseSettings();
-  await expect(page.getByRole('textbox', { name: 'Company invite code' })).toHaveAttribute('required', '');
+  await expect(page.getByRole('textbox', { name: /invite/i })).toHaveCount(0);
+  expect(discoveryRequests).toBe(0);
   await page.getByRole('button', { name: 'Back to sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Sign in to your workspace.' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Create account', exact: true })).toBeVisible();
 });
 
-test('creates a real account even when registration settings cannot be fetched', async ({ page }) => {
+test('shows a duplicate-account error while keeping signup fields', async ({ page }) => {
   const server = await connectWorkspace(page);
-  await page.route('https://script.google.com/**', async route => {
-    if (route.request().postDataJSON().action === 'registrationInfo') await route.abort('failed');
-    else await route.fallback();
-  });
   await page.goto('http://localhost:3002');
   await page.getByRole('button', { name: 'Create account', exact: true }).click();
   await page.getByRole('textbox', { name: 'Your name' }).fill('New teammate');
-  await page.getByRole('textbox', { name: 'Username', exact: true }).fill('discovery-unavailable@hays.test');
+  await page.getByRole('textbox', { name: 'Username', exact: true }).fill(account.email);
   await page.getByLabel('Password', { exact: true }).fill('new member password');
-  await page.getByRole('textbox', { name: 'Company invite code' }).fill(server.properties.get('REGISTRATION_CODE'));
   await page.getByRole('form', { name: 'Create company account' }).getByRole('button', { name: 'Create account', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
-  expect(server.sheets.get('Users').data.some((row: unknown[]) => row[0] === 'discovery-unavailable@hays.test')).toBe(true);
+  await expect(page.getByRole('alert')).toContainText('An account with that email already exists');
+  await expect(page.getByRole('textbox', { name: 'Username', exact: true })).toHaveValue(account.email);
+  await expect(page.getByLabel('Password', { exact: true })).toHaveValue('new member password');
+  expect(server.sheets.get('Users').data).toHaveLength(5);
 });
 
 test('an empty Google Sheet workspace shows onboarding and creates its first real channel', async ({ page }) => {

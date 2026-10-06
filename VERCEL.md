@@ -22,7 +22,7 @@ This workspace currently has no Git repository. You can first put the prepared s
 
 Set these under Vercel Project > Settings > Environment Variables. Apply them to the deployment environments you will use, and rebuild after changing the frontend URL.
 
-The current messaging endpoint is the `VITE_APPS_SCRIPT_URL` in [.env.example](.env.example). It reports backend version `4` with company-email authentication. Use that same URL in Vercel to publish the updated app.
+The frontend now defaults to the supplied messaging URL in [.env.example](.env.example), so a missing or blank `VITE_APPS_SCRIPT_URL` does not disable signup or sign-in. Set that variable only to override the endpoint. Backend version `5` enables signup for any email without invitations; publish the updated `apps-script/Code.gs` to apply that behavior to the live service.
 
 | Variable | Value / handling |
 | --- | --- |
@@ -41,7 +41,7 @@ The frontend can deploy and install without sender secrets, but background push 
 1. Copy the local `apps-script/Code.gs` and `apps-script/appsscript.json` into the **dedicated messaging project**, preserving `MESSAGING_SPREADSHEET_ID`.
 2. Set Script Properties `VAPID_PUBLIC_KEY`, `PUSH_RELAY_SECRET`, and `PUSH_RELAY_URL=https://YOUR-STABLE-DOMAIN/api/push`.
 3. Run `setupPushMessaging()` in the Apps Script editor and authorize the added scopes. It creates the optional push tables and one background minute trigger without resetting messages or accounts.
-4. Update the messaging deployment to a **new version** after backend changes. The current local and connected backend status report version `4`.
+4. Update the messaging deployment to a **new version** after backend changes. The updated local backend reports version `5` with `registrationMode: open`; the connected deployment still reported version `4` when last checked.
 5. Confirm `GET https://YOUR-STABLE-DOMAIN/api/push` reports `enabled: true`, and Apps Script Triggers/Executions show successful queue delivery.
 
 Use a stable deployment domain for installation and subscriptions. Preview domains can be protected by Vercel authentication; Apps Script and installed apps must be able to reach the chosen domain. Configure deployment protection appropriately for the intended public application endpoint. The relay still requires its own secret for every delivery request. Keep the VAPID keys unchanged across deployments; rotating them requires devices to subscribe again.

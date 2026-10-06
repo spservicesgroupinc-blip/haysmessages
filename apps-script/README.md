@@ -1,8 +1,8 @@
 # Messaging authentication and rollout
 
-The login page sends `login` with `email` and `password` to the messaging web-app `/exec` URL. The username is the full company email address. `Code.gs` also accepts `username` as an alias for `email`; when both are supplied they must identify the same account. Email addresses are trimmed and lowercased; passwords are preserved exactly.
+The login page sends `login` with `email` and `password` to the messaging web-app `/exec` URL. Any valid email address can be a username. `Code.gs` also accepts `username` as an alias for `email`; when both are supplied they must identify the same account. Email addresses are trimmed and lowercased; passwords are preserved exactly.
 
-The backend stores salted password hashes in `Users` and hashed session tokens in `Sessions`. Users must be active. Five failed password attempts lock an account for 15 minutes. Successful authentication returns a session valid for 12 hours. All workspace, messaging, and push requests require that session. Invite registration creates a member account; it cannot grant administrator access.
+The backend stores salted password hashes in `Users` and hashed session tokens in `Sessions`. Users must be active. Five failed password attempts lock an account for 15 minutes. Successful authentication returns a session valid for 12 hours. All workspace, messaging, and push requests require that session. Anyone can register using their name, any valid email, and a password of at least 10 characters. Registration creates a member account and returns a session immediately; it cannot grant administrator access.
 
 ## Update the existing deployment
 
@@ -11,8 +11,8 @@ The backend stores salted password hashes in `Users` and hashed session tokens i
 3. Run `setupMessaging()` in the editor. It creates missing empty tables and preserves existing accounts and messages. It does not create example people, messages, or channels.
 4. Confirm an active account exists in `Users`. Existing accounts work without changing their hashes. For a first administrator, follow the steps below.
 5. Choose **Deploy > Manage deployments**, edit the existing messaging web-app deployment, select **New version**, and deploy. Execute as **Me** with access **Anyone**. Updating the existing deployment keeps the same `/exec` URL. Saving editor code alone does not publish it.
-6. Open the `/exec` URL. It should report version `4`, `configured: true`, and `usernameType: "email"`. These are public status fields and do not expose Sheet data or secrets.
-7. Open the updated frontend and sign in with a provisioned company email/password, or choose **Create account** with the `REGISTRATION_CODE` from Script Properties. Create a channel if the Sheet is new. Verify sending and receiving with two actual accounts.
+6. Open the `/exec` URL. It should report version `5`, `configured: true`, and `registrationMode: "open"`. These are public status fields and do not expose Sheet data or secrets.
+7. Publish the updated frontend build. It uses the supplied `/exec` URL even without a frontend environment variable. Open it and choose **Create account** with your name, any valid email, and a password. Create a channel if the Sheet is new. Verify sending and receiving with two actual accounts.
 
 See Google's [web-app deployment guide](https://developers.google.com/apps-script/guides/web) and [versioned deployment guide](https://developers.google.com/apps-script/concepts/deployments#versioned_deployments).
 
@@ -47,8 +47,8 @@ Keep these column names and their order. Do not put plaintext passwords in the S
 | Messages | Id, ConversationId, AuthorEmail, AuthorName, Body, CreatedAt, UpdatedAt, Deleted, ParentId, ReactionsJson, ClientId |
 | ReadReceipts | Email, ConversationId, ReadThrough |
 
-`Active` is the Boolean value `TRUE`; `Role` is `admin` or `member`. Provision accounts through the editor helper or invite registration so salts and password hashes are generated correctly. Optional push tabs are managed by `setupPushMessaging()` separately.
+`Active` is the Boolean value `TRUE`; `Role` is `admin` or `member`. Create accounts through the signup page or editor helper so salts and password hashes are generated correctly. Optional push tabs are managed by `setupPushMessaging()` separately.
 
-## Registration settings
+## Open registration
 
-`REGISTRATION_MODE` supports `invite` (default), `off`, and `open`. Unknown settings disable registration. `REGISTRATION_CODE` controls invite access. `REGISTRATION_EMAIL_DOMAINS` optionally restricts registration to comma-separated company domains. None of these secrets belong in frontend environment variables.
+Version `5` always allows registration with any valid email address. Previous `REGISTRATION_MODE`, `REGISTRATION_CODE`, and `REGISTRATION_EMAIL_DOMAINS` properties are ignored and may be removed. No invitation or domain approval is needed. Existing accounts and their password hashes remain compatible. The frontend sends only name, email, and password for signup.

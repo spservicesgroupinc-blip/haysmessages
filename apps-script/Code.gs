@@ -1,8 +1,8 @@
 /** Hays + Sons Team Messaging. Deploy this in a NEW Apps Script project.
  * Run setupMessaging() in the editor, create the first admin with createUser(),
  * then deploy a web app executing as Me, accessible to Anyone.
- * All data requests require an application session; registration is invite-only.
- * Company email is the username. Passwords and session tokens are stored as hashes.
+ * All data requests require an application session; anyone can create an account.
+ * Any valid email is a username. Passwords and session tokens are stored as hashes.
  * Setup creates empty tables and preserves the existing spreadsheet and accounts.
  */
 var SCHEMA = {
@@ -31,10 +31,7 @@ function setupMessaging() {
       }
     });
     props.setProperty('MESSAGING_SPREADSHEET_ID', db.getId());
-    if (!props.getProperty('REGISTRATION_MODE')) props.setProperty('REGISTRATION_MODE','invite');
-    if (!props.getProperty('REGISTRATION_CODE')) props.setProperty('REGISTRATION_CODE',Utilities.getUuid());
     Logger.log('Messaging database: ' + db.getUrl());
-    Logger.log('Registration invite code is in Project Settings > Script Properties > REGISTRATION_CODE.');
     return {spreadsheetUrl:db.getUrl()};
   } finally { lock.releaseLock(); }
 }
@@ -75,7 +72,7 @@ function email_(value) {
 // Keep the existing email payload compatible, and accept username from other clients.
 function accountEmail_(payload) {
   var email=email_(payload.email===undefined ? payload.username : payload.email);
-  if(payload.username!==undefined && email_(payload.username)!==email)fail_('bad_request','Username must be your company email address.');
+  if(payload.username!==undefined && email_(payload.username)!==email)fail_('bad_request','Username must match your email address.');
   return email;
 }
 // Prevent user text from being interpreted as a spreadsheet formula.
@@ -146,18 +143,10 @@ function login_(payload) {
   return session_(person_(row));
 }
 function registrationInfo_() {
-  var props=PropertiesService.getScriptProperties(), mode=(props.getProperty('REGISTRATION_MODE')||'invite').trim().toLowerCase();
-  return {enabled:mode==='invite'||mode==='open',requiresInvite:mode!=='open',minPasswordLength:10,usernameType:'email'};
+  return {enabled:true,requiresInvite:false,minPasswordLength:10,usernameType:'email',registrationMode:'open'};
 }
 function register_(payload) {
-  var info=registrationInfo_(), props=PropertiesService.getScriptProperties();
-  if(!info.enabled) fail_('registration_closed','Registration is closed. Contact your administrator.');
-  var code=props.getProperty('REGISTRATION_CODE');
-  if(info.requiresInvite && (!code || !equal_(String(payload.inviteCode||''),code))) fail_('invalid_invite_code','The invite code is incorrect.');
-  var domains=(props.getProperty('REGISTRATION_EMAIL_DOMAINS')||'').split(',').map(function(d){return d.trim().toLowerCase();}).filter(Boolean);
-  var email=accountEmail_(payload);
-  if(domains.length && domains.indexOf(email.split('@')[1])<0) fail_('domain_not_allowed','Use an approved company email address.');
-  return session_(addUser_(email,payload.name,payload.password,'member'));
+  return session_(addUser_(accountEmail_(payload),payload.name,payload.password,'member'));
 }
 function conversation_(row) { return {id:String(row[0]),name:String(row[1]),description:String(row[2]),kind:String(row[3]),members:JSON.parse(row[4]||'[]'),createdBy:String(row[5]),createdAt:String(row[6]),lastActivity:String(row[6]),unread:0}; }
 function visible_(conversation,user) { return conversation.kind==='channel' || conversation.members.indexOf(user.email)>=0; }
@@ -300,7 +289,7 @@ function doPost(e) {
   } catch(err) { return json_({ok:false,error:err.message||'Request failed.',code:err.code||'server_error'}); }
   finally {if(lock)lock.releaseLock();}
 }
-function doGet() { return json_({ok:true,data:{app:'Hays + Sons Team Messaging',version:4,configured:!!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),usernameType:'email',features:['email-password-auth','empty-workspace-setup','message-id-pagination','root-message-pages','web-push']}}); }
+function doGet() { return json_({ok:true,data:{app:'Hays + Sons Team Messaging',version:5,configured:!!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),usernameType:'email',registrationMode:'open',features:['email-password-auth','open-registration','empty-workspace-setup','message-id-pagination','root-message-pages','web-push']}}); }
 /** Run periodically from the editor or an Apps Script time trigger. */
 function cleanupSessions() {
   var lock=LockService.getScriptLock();lock.waitLock(30000);

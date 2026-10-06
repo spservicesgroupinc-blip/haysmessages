@@ -6,8 +6,8 @@ test('setup creates empty tables, is idempotent and preserves existing accounts 
   const b = backend({ channels: false }); b.context.setupMessaging();
   assert.equal(b.sheets.size, 5);
   for (const sheet of b.sheets.values()) assert.equal(sheet.data.length, 1);
-  assert.equal(b.properties.get('REGISTRATION_MODE'), 'invite');
-  assert.ok(b.properties.get('REGISTRATION_CODE'));
+  assert.equal(b.properties.has('REGISTRATION_MODE'), false);
+  assert.equal(b.properties.has('REGISTRATION_CODE'), false);
   const session = b.user('admin@hays.test', 'admin');
   assert.deepEqual(b.ok('bootstrap', {}, session).conversations, []);
   const conversation = b.ok('createConversation', { kind: 'channel', name: 'company-updates' }, session);
@@ -18,13 +18,13 @@ test('setup creates empty tables, is idempotent and preserves existing accounts 
   assert.equal(b.ok('listMessages', { conversationId: conversation.id }, session).messages[0].id, message.id);
 });
 
-test('company email usernames normalize, support both payload names and reject conflicting identities', () => {
+test('email usernames normalize, support both payload names and reject conflicting identities', () => {
   const b = backend(); b.user('alex@hays.test');
   assert.equal(b.ok('login', { username: '  ALEX@HAYS.TEST  ', password: 'correct password' }).user.email, 'alex@hays.test');
   assert.equal(b.ok('login', { email: ' ALEX@HAYS.TEST ', password: 'correct password' }).user.email, 'alex@hays.test');
   assert.equal(b.call('login', { email: 'alex@hays.test', username: 'other@hays.test', password: 'correct password' }).code, 'bad_request');
   assert.equal(b.call('login', { username: 'alex', password: 'correct password' }).code, 'bad_request');
-  const registered = b.ok('register', { username: 'new@hays.test', name: 'New teammate', password: 'new password', inviteCode: b.properties.get('REGISTRATION_CODE') });
+  const registered = b.ok('register', { username: 'new@hays.test', name: 'New teammate', password: 'new password' });
   assert.equal(registered.user.email, 'new@hays.test');
 });
 
@@ -47,18 +47,19 @@ test('password resets are editor-only, retain accounts and revoke every session 
   assert.notEqual(updated[4], 'replacement password');
 });
 
-test('public status reports the auth version and invalid registration settings fail closed', () => {
+test('public status reports open signup and old registration restrictions cannot block signup', () => {
   const b = backend();
   const status = JSON.parse(b.context.doGet()).data;
-  assert.equal(status.version, 4); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
-  b.properties.set('REGISTRATION_MODE', 'invalid');
-  assert.equal(b.ok('registrationInfo').enabled, false);
-  assert.equal(b.call('register', { username: 'new@hays.test', name: 'New', password: 'correct password' }).code, 'registration_closed');
-  b.properties.set('REGISTRATION_MODE', ' INVITE ');
-  assert.equal(b.ok('registrationInfo').requiresInvite, true);
-  b.properties.set('REGISTRATION_MODE', 'open');
-  assert.equal(b.ok('registrationInfo').requiresInvite, false);
-  assert.ok(b.ok('register', { username: 'new@hays.test', name: 'New', password: 'correct password' }).token);
+  assert.equal(status.version, 5); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
+  assert.equal(status.registrationMode, 'open');
+  b.properties.set('REGISTRATION_CODE', 'obsolete-code');
+  b.properties.set('REGISTRATION_EMAIL_DOMAINS', 'company.test');
+  for (const mode of ['invalid', 'invite', 'off', 'open']) {
+    b.properties.set('REGISTRATION_MODE', mode);
+    assert.equal(b.ok('registrationInfo').enabled, true);
+    assert.equal(b.ok('registrationInfo').requiresInvite, false);
+    assert.ok(b.ok('register', { username: `${mode}@gmail.com`, name: 'New', password: 'correct password' }).token);
+  }
 });
 
 test('sessions require valid credentials and expire, deactivate and revoke correctly', () => {
@@ -92,19 +93,17 @@ test('five failed attempts lock an account and expired lock can recover', () => 
   assert.equal(b.sheets.get('Users').data[1][6], 0);
 });
 
-test('registration checks invite, approved domain, duplicate accounts and closed registration', () => {
+test('registration accepts any email without an invite, validates credentials and prevents duplicate/admin signup', () => {
   const b = backend();
   const payload = { email: 'new@hays.test', name: 'New teammate', password: 'new password' };
-  assert.equal(b.call('register', payload).code, 'invalid_invite_code');
-  payload.inviteCode = b.properties.get('REGISTRATION_CODE');
-  b.properties.set('REGISTRATION_EMAIL_DOMAINS', 'hays.test');
-  assert.equal(b.call('register', { ...payload, email: 'new@outside.test' }).code, 'domain_not_allowed');
+  assert.ok(b.ok('register', { ...payload, email: 'new@outside.test' }).token);
   const session = b.ok('register', { ...payload, role: 'admin' });
   assert.equal(session.user.role, 'member');
   assert.equal(b.call('register', payload).code, 'user_exists');
-  b.properties.set('REGISTRATION_MODE', 'off');
-  assert.equal(b.ok('registrationInfo').enabled, false);
-  assert.equal(b.call('register', { ...payload, email: 'other@hays.test' }).code, 'registration_closed');
+  assert.equal(b.call('register', { ...payload, email: ' NEW@HAYS.TEST ' }).code, 'user_exists');
+  assert.equal(b.call('register', { ...payload, email: 'invalid' }).code, 'bad_request');
+  assert.equal(b.call('register', { ...payload, email: 'short@gmail.com', password: 'short' }).code, 'weak_password');
+  assert.equal(b.call('register', { ...payload, email: 'blank@gmail.com', name: ' ' }).code, 'bad_request');
 });
 
 test('private conversations are restricted, direct messages deduplicate and channels validate', () => {

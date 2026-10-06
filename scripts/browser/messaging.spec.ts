@@ -109,7 +109,7 @@ test('configured login preserves failed-send draft, retries the same identifier 
     const body = route.request().postDataJSON(); let data: unknown;
     if (expired && body.sessionToken) { await route.fulfill({ json: { ok: false, error: 'Your session has expired. Please sign in again.', code: 'session_expired' } }); return; }
     switch (body.action) {
-      case 'registrationInfo': data = { enabled: true, requiresInvite: true, minPasswordLength: 10 }; break;
+      case 'registrationInfo': data = { enabled: true, requiresInvite: false, minPasswordLength: 10 }; break;
       case 'login': data = session; break;
       case 'bootstrap': data = { user, people: [user], conversations: [conversation] }; break;
       case 'listMessages': data = { messages, hasMore: false, nextBeforeId: messages[0]?.id || '', readThrough: messages.at(-1)?.createdAt || '' }; break;
@@ -158,7 +158,7 @@ test('ignores stale conversation responses and supports the original deployed pa
   await page.route('https://script.google.com/**', async route => {
     const body = route.request().postDataJSON(); let data: unknown;
     switch (body.action) {
-      case 'registrationInfo': data = { enabled: false, requiresInvite: true, minPasswordLength: 10 }; break;
+      case 'registrationInfo': data = { enabled: false, requiresInvite: false, minPasswordLength: 10 }; break;
       case 'bootstrap': data = { user, people: [user], conversations }; break;
       case 'listMessages': {
         if (body.conversationId === 'general') {

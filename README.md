@@ -1,6 +1,6 @@
 # Hays + Sons Team Messaging
 
-React, TypeScript and Vite workspace for channels, direct and group messages, search, threads, reactions, unread counts, and message editing/deletion. The backend is a separate Google Apps Script project with its own Google spreadsheet. Company email is the username; Apps Script checks the password against the `Users` sheet and issues a 12-hour session. The app requires a company account and loads only that account's workspace data. Passwords are never stored in the frontend.
+React, TypeScript and Vite workspace for channels, direct and group messages, search, threads, reactions, unread counts, and message editing/deletion. The backend is a separate Google Apps Script project with its own Google spreadsheet. Any valid email address can be used as a username; Apps Script checks the password against the `Users` sheet and issues a 12-hour session. Anyone can create an account with their name, email, and password and enter the shared company workspace immediately. Passwords are never stored in the frontend.
 
 ## Run locally
 
@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3001 and sign in with your company email address and messaging password. If you do not have an account, choose the **Create account** button below Sign in and use your administrator's company invite code. This button is always visible, including while account settings are loading or unavailable. Apps Script enforces the company's registration settings when the form is submitted. The supplied Apps Script URL is configured in the ignored `.env.local` file. Restart Vite after changing environment variables. The URL is public frontend configuration; never put passwords, invite codes, or admin secrets in `VITE_*` variables. An unconfigured app shows a disabled sign-in form and an administrator contact message.
+Open http://localhost:3001 and sign in with your email address and messaging password. If you do not have an account, choose **Create account**, enter your name, any valid email, and a password of at least 10 characters, and submit. Signup immediately signs you in. The app connects to the supplied Apps Script URL by default, including in a production build without `.env.local` or a hosting environment variable. A valid `VITE_APPS_SCRIPT_URL` can override that default for another deployment; missing, blank, or malformed overrides use the supplied URL. This is public connection information. Never put passwords or admin secrets in `VITE_*` variables.
 
 Local preview accounts, messages, banners, and the preview entry point have been removed. Existing preview sessions, data, and drafts are cleared when the updated app opens. A newly initialized backend starts with empty tables: create your first channel after signing in. Existing Sheet accounts and conversations remain available.
 
@@ -47,28 +47,22 @@ npm test
 npm run test:browser
 ```
 
-`lint` checks TypeScript. Backend tests run the actual `apps-script/Code.gs` with in-memory Google service doubles; root `npm test` also runs push queue and relay tests. Root `npm install` installs the push-service workspace dependency. Authentication and messaging browser tests route requests through the same `Code.gs` using isolated accounts and spreadsheets. They cover rejected passwords, email normalization, invite registration, sign-out, session expiry, old preview cleanup, empty workspace onboarding, and desktop/mobile messaging. PWA tests cover manifest/icons/install criteria, offline shell and saved messages, private-cache cleanup, explicit subscription controls, native service-worker notification display, notification navigation, and iPhone installation guidance. Tests do not create company accounts or send messages/notifications to real users. The browser configuration uses installed Microsoft Edge; change `channel` in `playwright.config.ts` if using another browser. Physical iPhone installation and provider-to-device push delivery still require verification on the published HTTPS app.
+`lint` checks TypeScript. Backend tests run the actual `apps-script/Code.gs` with in-memory Google service doubles; root `npm test` also runs push queue and relay tests. Root `npm install` installs the push-service workspace dependency. Authentication and messaging browser tests route requests through the same `Code.gs` using isolated accounts and spreadsheets. They cover signup with an empty frontend environment variable, any-email registration, immediate sign-in, duplicate accounts, rejected passwords, email normalization, sign-out, session expiry, old preview cleanup, empty workspace onboarding, and desktop/mobile messaging. PWA tests cover manifest/icons/install criteria, offline shell and saved messages, private-cache cleanup, explicit subscription controls, native service-worker notification display, notification navigation, and iPhone installation guidance. Tests do not create company accounts or send messages/notifications to real users. The browser configuration uses installed Microsoft Edge; change `channel` in `playwright.config.ts` if using another browser. Physical iPhone installation and provider-to-device push delivery still require verification on the published HTTPS app.
 
 ## Connect or update the messaging backend
 
 1. Use a **separate messaging Apps Script project**, not the document app's project. Copy `apps-script/Code.gs` and `apps-script/appsscript.json` into that project.
-2. Run `setupMessaging()` from the editor and approve its spreadsheet permissions. To use an existing messaging spreadsheet, set `MESSAGING_SPREADSHEET_ID` in Script Properties before running setup. Setup creates missing empty tables and preserves existing accounts, conversations, and messages; it never adds sample data. The spreadsheet ID and generated invite code are saved in Script Properties.
+2. Run `setupMessaging()` from the editor and approve its spreadsheet permissions. To use an existing messaging spreadsheet, set `MESSAGING_SPREADSHEET_ID` in Script Properties before running setup. Setup creates missing empty tables and preserves existing accounts, conversations, and messages; it never adds sample data. The spreadsheet ID is saved in Script Properties.
 3. To provision the first administrator, temporarily add an editor-only wrapper calling `createUser('your-company-email', 'Your name', 'your-chosen-password', 'admin')`, run the wrapper, then remove it. Use at least 10 password characters. `createUser` is not available through HTTP requests.
 4. Deploy a web app executing as **Me**, accessible to **Anyone**. App sessions control access to conversations. For an existing deployment, select **Manage deployments**, edit the messaging deployment, select a **new version**, and deploy to keep the same `/exec` URL. Editor changes alone do not update the deployed app.
-5. Set `VITE_APPS_SCRIPT_URL` in `.env.local` to the `/exec` URL. Copy `.env.example` if configuring a new checkout. Restart `npm run dev`, or rebuild for hosting.
-6. Confirm the public URL returns `Hays + Sons Team Messaging`, version `4`, `configured: true`, and `usernameType: email`. Sign in using a provisioned account, or create a member account with the invite code from Script Properties. For a fresh spreadsheet, create your first channel from the workspace welcome screen.
+5. The frontend already defaults to the supplied `/exec` URL. If you deploy to another URL, update `VITE_APPS_SCRIPT_URL` and restart development or rebuild for hosting.
+6. Confirm the public URL returns `Hays + Sons Team Messaging`, version `5`, `configured: true`, and `registrationMode: open`. Create an account using any valid email address. For a fresh spreadsheet, create your first channel from the workspace welcome screen.
 
 See [apps-script/README.md](apps-script/README.md) for the Users schema, first administrator setup, password resets, and a rollout checklist. Existing password hashes and account rows are compatible with this update. No new column or password migration is required.
 
-Optional Script Properties:
+Registration is always open in backend version `5`. Previous registration mode, code, and domain settings are ignored. Existing accounts remain compatible.
 
-| Property | Purpose |
-| --- | --- |
-| `REGISTRATION_MODE` | `invite` by default; `off` disables registration; `open` removes the invite requirement. |
-| `REGISTRATION_CODE` | Invite code for new member accounts. |
-| `REGISTRATION_EMAIL_DOMAINS` | Comma-separated approved email domains; blank allows any domain with a valid invite. |
-
-The updated live URL supplied on October 6, 2026 is configured in `.env.local` and `.env.example`. Public status and registration checks confirm backend version `4`, `configured: true`, `usernameType: email`, and invite-only registration. The frontend is connected to that deployment, and the production build embeds that URL. Set the same `VITE_APPS_SCRIPT_URL` in your hosting project's environment and rebuild when publishing. Authenticated live flows require a company account or invite code.
+The supplied live URL was checked on October 6, 2026 and still reports backend version `4`. Publish the updated `apps-script/Code.gs` as a new version of the existing deployment to enable open signup live. The frontend source and production build now embed the supplied URL as their default, fixing disabled forms when hosting omits the environment variable. Publish the updated frontend build as well if your hosted app still shows the connection warning.
 
 ## Operation
 

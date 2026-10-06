@@ -17,7 +17,7 @@ async function mockWorkspace(page: Page, handler?: (action: string, payload: Rec
     const extra = handler?.(body.action, body);
     if (extra !== undefined) data = extra;
     else switch (body.action) {
-      case 'registrationInfo': data = { enabled: true, requiresInvite: true, minPasswordLength: 10 }; break;
+      case 'registrationInfo': data = { enabled: true, requiresInvite: false, minPasswordLength: 10 }; break;
       case 'bootstrap': data = { user, people: [user], conversations }; break;
       case 'listMessages': data = { messages: body.conversationId === 'general' ? messages : [example('sales')], hasMore: false, nextBeforeId: 'message-general', readThrough: date }; break;
       case 'editMessage': messages[0] = { ...messages[0], body: body.body, updatedAt: new Date().toISOString() }; data = messages[0]; break;
@@ -38,7 +38,7 @@ async function openDeviceSettings(page: Page) {
 }
 
 test('production manifest is installable, icons are real PNGs, and the sign-in page reloads offline', async ({ page, context }) => {
-  await page.route('https://script.google.com/**', route => route.fulfill({ json: { ok: true, data: { enabled: false, requiresInvite: true, minPasswordLength: 10 } } }));
+  await page.route('https://script.google.com/**', route => route.fulfill({ json: { ok: true, data: { enabled: false, requiresInvite: false, minPasswordLength: 10 } } }));
   await ready(page);
   const cdp = await context.newCDPSession(page);
   const manifest = await cdp.send('Page.getAppManifest');
