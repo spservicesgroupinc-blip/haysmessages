@@ -7,7 +7,7 @@ export const account = { email: 'browser@hays.test', name: 'Test teammate', pass
 
 // Browser requests execute the real Code.gs against isolated Google service doubles.
 // These accounts and messages exist only in the test process.
-export async function connectWorkspace(page: Page, options: { channels?: boolean } = {}) {
+export async function connectWorkspace(page: Page, options: { channels?: boolean; withoutPushEnqueue?: boolean } = {}) {
   const server = backend(options);
   server.context.createUser(account.email, account.name, account.password, 'admin');
   for (const name of ['One', 'Two', 'Three']) {

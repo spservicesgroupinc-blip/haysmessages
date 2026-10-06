@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
 
-function backend({ channels = true } = {}) {
+function backend({ channels = true, withoutPushEnqueue = false } = {}) {
   const properties = new Map();
   const sheets = new Map();
   class Sheet {
@@ -36,7 +36,9 @@ function backend({ channels = true } = {}) {
     ContentService: { MimeType: { JSON: 'application/json' }, createTextOutput: value => ({ setMimeType: () => value }) },
     Logger: { log: () => {} },
   });
-  vm.runInContext(fs.readFileSync('apps-script/Code.gs', 'utf8'), context);
+  let source = fs.readFileSync('apps-script/Code.gs', 'utf8');
+  if (withoutPushEnqueue) source = source.replace('function enqueuePush_(', 'function unavailablePushModule_(');
+  vm.runInContext(source, context);
   context.setupMessaging();
   // Test-only channels. Production setup creates empty tables.
   if (channels) for (const name of ['general', 'sales']) {

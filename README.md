@@ -56,13 +56,15 @@ npm run test:browser
 3. To provision the first administrator, temporarily add an editor-only wrapper calling `createUser('your-company-email', 'Your name', 'your-chosen-password', 'admin')`, run the wrapper, then remove it. Use at least 10 password characters. `createUser` is not available through HTTP requests.
 4. Deploy a web app executing as **Me**, accessible to **Anyone**. App sessions control access to conversations. For an existing deployment, select **Manage deployments**, edit the messaging deployment, select a **new version**, and deploy to keep the same `/exec` URL. Editor changes alone do not update the deployed app.
 5. The frontend already defaults to the supplied `/exec` URL. If you deploy to another URL, update `VITE_APPS_SCRIPT_URL` and restart development or rebuild for hosting.
-6. Confirm the public URL returns `Hays + Sons Team Messaging`, version `5`, `configured: true`, and `registrationMode: open`. Create an account using any valid email address. For a fresh spreadsheet, create your first channel from the workspace welcome screen.
+6. Confirm the public URL returns `Hays + Sons Team Messaging`, version `6`, `configured: true`, and `registrationMode: open`. Create an account using any valid email address. For a fresh spreadsheet, create your first channel from the workspace welcome screen.
 
 See [apps-script/README.md](apps-script/README.md) for the Users schema, first administrator setup, password resets, and a rollout checklist. Existing password hashes and account rows are compatible with this update. No new column or password migration is required.
 
-Registration is always open in backend version `5`. Previous registration mode, code, and domain settings are ignored. Existing accounts remain compatible.
+Registration is always open in backend version `5` and later. Previous registration mode, code, and domain settings are ignored. Existing accounts remain compatible.
 
-The updated live URL supplied on October 6, 2026 was checked and reports backend version `5`, `configured: true`, and `registrationMode: open`. Its registration endpoint confirms signup is enabled without invitations. The frontend source, local environment, environment example, and production build all use that updated URL. The default connection works even when hosting omits the environment variable. Publish the updated frontend build if your hosted app still uses a previous URL or shows the connection warning.
+The latest live URL supplied on October 6, 2026 was checked and reports backend version `6`, `configured: true`, and `registrationMode: open`, including the `optional-push-on-send` feature. Its registration endpoint confirms signup is enabled without invitations. The frontend source, local environment, environment example, and production build all use that updated URL. The default connection works even when hosting omits the environment variable. Publish the updated frontend build if your hosted app still uses a previous URL or shows the connection warning.
+
+Backend version `6` fixes `enqueuePush_ is not defined` when sending messages. Optional notification failures cannot turn a saved message into a failed send; retries remain idempotent. The user-published live deployment now reports this version and feature. Sending checks use isolated test accounts and spreadsheets; they do not create messages in the company Sheet.
 
 ## Operation
 

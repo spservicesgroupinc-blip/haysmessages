@@ -220,7 +220,10 @@ function sendMessage_(payload,user) {
   var now=new Date().toISOString();
   var row=[Utilities.getUuid(),payload.conversationId,user.email,cell_(user.name),cell_(body),now,now,false,parent,'{}',clientId];
   sheet_('Messages').appendRow(row);
-  enqueuePush_(row);
+  // Notification code is optional. A missing module or queue failure must never
+  // turn an already saved message into a failed send response.
+  try {if(typeof enqueuePush_==='function')enqueuePush_(row);}
+  catch(err) {Logger.log('The message was saved; its optional notification could not be queued.');}
   return message_(row);
 }
 function mutateMessage_(payload,user) {
@@ -289,7 +292,7 @@ function doPost(e) {
   } catch(err) { return json_({ok:false,error:err.message||'Request failed.',code:err.code||'server_error'}); }
   finally {if(lock)lock.releaseLock();}
 }
-function doGet() { return json_({ok:true,data:{app:'Hays + Sons Team Messaging',version:5,configured:!!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),usernameType:'email',registrationMode:'open',features:['email-password-auth','open-registration','empty-workspace-setup','message-id-pagination','root-message-pages','web-push']}}); }
+function doGet() { return json_({ok:true,data:{app:'Hays + Sons Team Messaging',version:6,configured:!!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),usernameType:'email',registrationMode:'open',features:['email-password-auth','open-registration','optional-push-on-send','empty-workspace-setup','message-id-pagination','root-message-pages','web-push']}}); }
 /** Run periodically from the editor or an Apps Script time trigger. */
 function cleanupSessions() {
   var lock=LockService.getScriptLock();lock.waitLock(30000);

@@ -50,7 +50,7 @@ test('password resets are editor-only, retain accounts and revoke every session 
 test('public status reports open signup and old registration restrictions cannot block signup', () => {
   const b = backend();
   const status = JSON.parse(b.context.doGet()).data;
-  assert.equal(status.version, 5); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
+  assert.equal(status.version, 6); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
   assert.equal(status.registrationMode, 'open');
   b.properties.set('REGISTRATION_CODE', 'obsolete-code');
   b.properties.set('REGISTRATION_EMAIL_DOMAINS', 'company.test');
@@ -133,6 +133,33 @@ test('send retries are idempotent, scoped to author and cannot reuse another con
   assert.equal(b.call('sendMessage', { ...payload, conversationId: channels[1].id }, a).code, 'duplicate');
   assert.equal(b.call('sendMessage', { ...payload, clientId: 'empty', body: ' ' }, a).code, 'bad_request');
   assert.equal(b.call('sendMessage', { ...payload, clientId: 'long', body: 'x'.repeat(4001) }, a).code, 'bad_request');
+});
+
+test('missing notification code cannot fail saved messages or replies; retries remain idempotent', () => {
+  const b = backend({ withoutPushEnqueue: true }); const author = b.user('author@hays.test');
+  const conversationId = b.ok('bootstrap', {}, author).conversations[0].id;
+  const payload = { conversationId, body: 'Saved without notification code', clientId: 'missing-push' };
+  const message = b.ok('sendMessage', payload, author);
+  assert.equal(b.ok('sendMessage', payload, author).id, message.id);
+  const reply = b.ok('sendMessage', { conversationId, parentId: message.id, body: 'Reply without notification code', clientId: 'missing-push-reply' }, author);
+  assert.equal(reply.parentId, message.id);
+  assert.equal(b.sheets.get('Messages').data.length, 3);
+  assert.equal(b.ok('listMessages', { conversationId }, author).messages.length, 2);
+});
+
+test('a throwing notification handler cannot fail a saved message; storage failures still fail', () => {
+  const b = backend(); const author = b.user('author@hays.test');
+  const conversationId = b.ok('bootstrap', {}, author).conversations[0].id;
+  let notificationAttempts = 0;
+  b.context.enqueuePush_ = () => { notificationAttempts++; throw new Error('Notification queue unavailable'); };
+  const payload = { conversationId, body: 'Saved despite notification failure', clientId: 'failed-push' };
+  const message = b.ok('sendMessage', payload, author);
+  assert.equal(b.ok('sendMessage', payload, author).id, message.id);
+  assert.equal(notificationAttempts, 1);
+  assert.equal(b.sheets.get('Messages').data.length, 2);
+  b.sheets.get('Messages').appendRow = () => { throw new Error('Spreadsheet unavailable'); };
+  assert.equal(b.call('sendMessage', { ...payload, clientId: 'storage-failure' }, author).ok, false);
+  assert.equal(notificationAttempts, 1);
 });
 
 test('only authors edit; administrators delete; reactions toggle and removed messages retain replies', () => {

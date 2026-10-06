@@ -16,6 +16,25 @@ async function choose(page: Page, name: string) {
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
 }
 
+test('a missing notification module does not fail sending or retain a sent draft', async ({ page }) => {
+  const server = await connectWorkspace(page, { withoutPushEnqueue: true });
+  await signIn(page);
+  const composer = page.getByRole('textbox', { name: 'Message #general' });
+  await composer.fill('Saved without notification module');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(composer).toHaveValue('');
+  const message = page.locator('article').filter({ hasText: 'Saved without notification module' });
+  await expect(message).toHaveCount(1);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await message.getByRole('button', { name: 'Reply', exact: true }).click();
+  const reply = page.getByRole('textbox', { name: 'Reply to thread' });
+  await reply.fill('Reply saved without notification module');
+  await page.getByRole('complementary', { name: 'Message thread' }).getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(reply).toHaveValue('');
+  await expect(page.getByText('Reply saved without notification module', { exact: true })).toBeVisible();
+  expect(server.sheets.get('Messages').data).toHaveLength(3);
+});
+
 test('authenticated workspace sends, edits, reacts, replies, searches, deletes and persists messages', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
   await workspace(page);

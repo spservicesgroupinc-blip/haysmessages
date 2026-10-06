@@ -3,7 +3,7 @@ import { clearSavedReads, offlineAccount, offlineReadAction, savedRead, saveRead
 
 const KEY='hays.messages.session.v1';
 // This is public connection information. Production builds work without an env file.
-const defaultBackendUrl='https://script.google.com/macros/s/AKfycbxaMg1Kdafihh5nrV_iw3_ryTSUkWjQuxiD1fWZhu1wEfE7bduePILSDnuKRP4TGq2k0A/exec';
+const defaultBackendUrl='https://script.google.com/macros/s/AKfycbzcbutQRzBUyaY9tzR46tl3xGKFiG1hOOjl_u60oHg8EbkWwFQP9quxrFYoaKYiP1m41g/exec';
 const deploymentUrl=/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/;
 const environmentUrl=(import.meta.env.VITE_APPS_SCRIPT_URL as string|undefined)?.trim()||'';
 export const backendUrl=deploymentUrl.test(environmentUrl)?environmentUrl:defaultBackendUrl;
