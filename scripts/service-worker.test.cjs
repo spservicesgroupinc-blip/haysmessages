@@ -54,6 +54,8 @@ test('nested relay payload opens correct conversation, deduplicates retries and 
   await w.dispatch('push', { data: { json: () => ({ title: 'Team alert', body: 'New message', conversationId: 'wrong', data: { conversationId: 'sales', messageId: 'message-1' } }) } });
   const first = w.seen.notifications[0];
   assert.equal(first.options.data.conversationId, 'sales'); assert.equal(first.options.tag, 'message-1');
+  assert.equal(first.options.silent, false);
+  assert.deepEqual(Array.from(first.options.vibrate), [160, 80, 160]);
   for (const value of [null, [], { data: [] }]) await w.dispatch('push', { data: { json: () => value } });
   await w.dispatch('push', { data: { json: () => { throw new Error('invalid'); } } });
   assert.equal(w.seen.notifications.length, 5);

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Hash, Info, Loader2, LogOut, Menu, MessageSquare, Plus, Search, Users, X } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { BarChart3, Hash, Info, Loader2, LogOut, Menu, MessageSquare, Plus, Search, Users, X } from 'lucide-react';
 import { AuthScreen } from './components/AuthScreen';
 import { BrandLogo } from './components/BrandLogo';
 import { Avatar, Composer, MessageCard, MessageList } from './components/Chat';
@@ -9,8 +9,11 @@ import { ApiError, backendUrl, loadSession, request, storeSession } from './lib/
 import { clearSavedReads, offlineAccount } from './lib/offline';
 import type { Bootstrap, Conversation, Message, Person, Session } from './lib/types';
 import { mergeMessages, useMessages, type ApiCall } from './lib/useMessages';
+import { createMessageAlerts } from './lib/messageAlerts';
+import { listenSoundPreference, playMessageSound, prepareSound, soundEnabled } from './lib/notificationSound';
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : 'Something went wrong. Please try again.';
+const SalesDashboard = lazy(() => import('./components/SalesDashboard'));
 function conversationName(c: Conversation, people: Person[], email: string) {
   return c.kind === 'dm' ? people.find(p => p.email === c.members.find(m => m !== email))?.name || c.name : c.name;
 }
@@ -39,6 +42,7 @@ export default function App() {
 function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire: () => void; onLogout: () => void }) {
   const [data, setData] = useState<Bootstrap | null>(null);
   const [selected, setSelected] = useState(() => new URLSearchParams(window.location.search).get('conversation') || '');
+  const [page, setPage] = useState<'messages' | 'sales'>(() => new URLSearchParams(window.location.search).get('page') === 'sales' ? 'sales' : 'messages');
   const [error, setError] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
   const [desktop, setDesktop] = useState(() => window.matchMedia('(min-width:701px)').matches);
@@ -48,11 +52,20 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
   const [refresh, setRefresh] = useState(0);
   const mounted = useRef(true);
   const revision = useRef(0);
+  const soundAccount = offlineAccount(session.user.email, backendUrl);
+  const sounds = useRef(soundEnabled(soundAccount));
+  const alerts = useRef(createMessageAlerts(session.user.email, () => { if (sounds.current) playMessageSound(); }));
+  useEffect(() => {
+    const stop = listenSoundPreference(soundAccount, enabled => { sounds.current = enabled; });
+    const unlock = () => { if (sounds.current) void prepareSound(); };
+    window.addEventListener('pointerdown', unlock); window.addEventListener('keydown', unlock);
+    return () => { stop(); window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
+  }, [soundAccount]);
   useEffect(() => {
     const open = (event: Event) => {
       const id = (event as CustomEvent<{conversationId?:string}>).detail?.conversationId;
       if (typeof id !== 'string') return;
-      if (data?.conversations.some(c => c.id === id)) { setSelected(id); setMobileNav(false); }
+      if (data?.conversations.some(c => c.id === id)) { setSelected(id); setPage('messages'); setMobileNav(false); }
       else setError('This conversation is not available in your workspace.');
     };
     window.addEventListener('hays:open-conversation', open);
@@ -65,7 +78,16 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
     else void device.clearAppBadge?.().catch(() => {});
   }, [data]);
   const api: ApiCall = useCallback(async <T,>(action: string, payload: Record<string, unknown> = {}, signal?: AbortSignal) => {
-    try { return await request<T>(action, payload, session, signal); }
+    try {
+      const result = await request<T>(action, payload, session, signal);
+      if (mounted.current && navigator.onLine && !signal?.aborted) {
+        if (action === 'bootstrap') alerts.current.bootstrap((result as Bootstrap).conversations);
+        if ((action === 'listMessages' || action === 'getThread') && !payload.query && !payload.before && !payload.beforeId) {
+          alerts.current.messages(String(payload.conversationId), (result as {messages: Message[]}).messages, `${action}:${payload.conversationId}:${payload.parentId || ''}`);
+        }
+      }
+      return result;
+    }
     catch (e) {
       if (mounted.current && e instanceof ApiError && ['unauthorized', 'session_expired'].includes(e.code)) onExpire();
       throw e;
@@ -102,12 +124,19 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
     return () => { stopped = true; controller.abort(); window.clearTimeout(timer); };
   }, [api, refresh]);
   const markRead = useCallback((id: string) => {
+    alerts.current.read(id);
     revision.current++;
     setData(previous => previous && { ...previous, conversations: previous.conversations.map(c => c.id === id ? { ...c, unread: 0 } : c) });
   }, []);
   function choose(id: string) {
-    setSelected(id); setMobileNav(false);
-    const url = new URL(window.location.href); url.searchParams.set('conversation', id); history.replaceState(null, '', url);
+    setSelected(id); setPage('messages'); setMobileNav(false);
+    const url = new URL(window.location.href); url.searchParams.set('conversation', id); url.searchParams.delete('page'); history.replaceState(null, '', url);
+  }
+  function showPage(next: 'messages' | 'sales') {
+    setPage(next); setMobileNav(false);
+    const url = new URL(window.location.href);
+    if (next === 'sales') url.searchParams.set('page', 'sales'); else url.searchParams.delete('page');
+    history.replaceState(null, '', url);
   }
   async function logout() {
     setLoggingOut(true);
@@ -132,11 +161,12 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
     }}>
       <div className="sidebar-brand"><BrandLogo size={32} sublabel="Team Messaging" tone="inverted" /><button className="icon-button mobile-only" aria-label="Close navigation" onClick={() => setMobileNav(false)}><X size={20} /></button></div>
       <div className="workspace-label"><span className="workspace-dot" /> Hays + Sons workspace</div>
+      <nav className="workspace-pages" aria-label="Workspace pages"><button className={`workspace-page-link ${page === 'messages' ? 'active' : ''}`} aria-current={page === 'messages' ? 'page' : undefined} onClick={() => showPage('messages')}><MessageSquare size={17} /><span>Messages</span></button><button className={`workspace-page-link ${page === 'sales' ? 'active' : ''}`} aria-current={page === 'sales' ? 'page' : undefined} onClick={() => showPage('sales')}><BarChart3 size={17} /><span>Sales dashboard</span></button></nav>
       <button className="new-message button" onClick={() => setCreate('dm')}><Plus size={17} /> New conversation</button>
       <nav className="conversation-nav">
         {(['channel', 'group', 'dm'] as const).map(kind => <section className="nav-section" key={kind}>
           <div className="nav-heading"><h2>{kind === 'channel' ? 'Channels' : kind === 'group' ? 'Group messages' : 'Direct messages'}</h2><button className="icon-button" aria-label={`Create ${kind === 'dm' ? 'direct message' : kind}`} onClick={() => setCreate(kind)}><Plus size={15} /></button></div>
-          {data?.conversations.filter(c => c.kind === kind).map(c => <button className={`conversation-link ${selected === c.id ? 'active' : ''}`} aria-current={selected === c.id ? 'page' : undefined} key={c.id} onClick={() => choose(c.id)}>
+          {data?.conversations.filter(c => c.kind === kind).map(c => <button className={`conversation-link ${page === 'messages' && selected === c.id ? 'active' : ''}`} aria-current={page === 'messages' && selected === c.id ? 'page' : undefined} key={c.id} onClick={() => choose(c.id)}>
             {kind === 'channel' ? <Hash size={17} /> : kind === 'group' ? <Users size={17} /> : <Avatar small name={conversationName(c, people, user.email)} />}
             <span>{conversationName(c, people, user.email)}</span>{c.unread > 0 && <span className="unread" aria-label={`${c.unread} unread messages`}>{c.unread > 99 ? '99+' : c.unread}</span>}
           </button>)}
@@ -148,7 +178,7 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
     </aside>
     <main className="workspace-main" inert={!desktop && mobileNav}>
       {error && <div className="workspace-error" role="alert"><span>{error}</span><button className="text-button" onClick={() => setRefresh(n => n + 1)}>Retry</button></div>}
-      {active ? <ConversationView key={active.id} conversation={active} title={conversationName(active, people, user.email)} people={people} user={user} api={api} onRead={markRead} onMenu={() => setMobileNav(true)} /> : <div className="workspace-empty"><button className="icon-button mobile-only" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu /></button>{!data ? <><Loader2 className="spin" /><h2>Loading your workspace</h2></> : <><MessageSquare size={36} /><h2>Welcome to your workspace</h2><p>Create a channel or message a teammate to get started.</p><button className="button primary" onClick={() => setCreate('channel')}>Create a channel</button></>}</div>}
+      {page === 'sales' ? <Suspense fallback={<div className="workspace-empty" role="status"><Loader2 className="spin" /><p>Loading sales dashboard</p></div>}><SalesDashboard api={api} onMenu={() => setMobileNav(true)} /></Suspense> : active ? <ConversationView key={active.id} conversation={active} title={conversationName(active, people, user.email)} people={people} user={user} api={api} onRead={markRead} onMenu={() => setMobileNav(true)} /> : <div className="workspace-empty"><button className="icon-button mobile-only" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu /></button>{!data ? <><Loader2 className="spin" /><h2>Loading your workspace</h2></> : <><MessageSquare size={36} /><h2>Welcome to your workspace</h2><p>Create a channel or message a teammate to get started.</p><button className="button primary" onClick={() => setCreate('channel')}>Create a channel</button></>}</div>}
     </main>
     {create && <CreateConversation kind={create} people={people} user={user} api={api} onClose={() => setCreate(null)} onCreated={c => {
       revision.current++;

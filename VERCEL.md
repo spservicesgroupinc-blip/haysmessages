@@ -26,7 +26,7 @@ The frontend now defaults to the supplied messaging URL in [.env.example](.env.e
 
 | Variable | Value / handling |
 | --- | --- |
-| `VITE_APPS_SCRIPT_URL` | `https://script.google.com/macros/s/AKfycbzcbutQRzBUyaY9tzR46tl3xGKFiG1hOOjl_u60oHg8EbkWwFQP9quxrFYoaKYiP1m41g/exec` |
+| `VITE_APPS_SCRIPT_URL` | `https://script.google.com/macros/s/AKfycbzELGedeAMQlprPvnwy5JkXSicGt7XBRE7AC0dujZ52QP7Zh67CpKly5Nco-ysMGPqCKA/exec` |
 | `VAPID_PUBLIC_KEY` | Public Web Push key; same key in Apps Script. |
 | `VAPID_PRIVATE_KEY` | Private sender key; server environment only. |
 | `VAPID_SUBJECT` | A real contact such as `mailto:administrator@your-company.com`. |
@@ -41,7 +41,9 @@ The frontend can deploy and install without sender secrets, but background push 
 1. Copy the local `apps-script/Code.gs` and `apps-script/appsscript.json` into the **dedicated messaging project**, preserving `MESSAGING_SPREADSHEET_ID`.
 2. Set Script Properties `VAPID_PUBLIC_KEY`, `PUSH_RELAY_SECRET`, and `PUSH_RELAY_URL=https://YOUR-STABLE-DOMAIN/api/push`.
 3. Run `setupPushMessaging()` in the Apps Script editor and authorize the added scopes. It creates the optional push tables and one background minute trigger without resetting messages or accounts.
-4. Update the messaging deployment to a **new version** after backend changes. The local backend and the latest connected endpoint checked on October 6 report version `6` with `registrationMode: open`. Version `6` keeps message sending successful when optional notification code is missing or fails. Publishing a new version of an existing deployment retains its URL; if creating a separate deployment, update the frontend endpoint too.
+4. Update the messaging deployment to a **new version** after backend changes. The local backend is version `7`, adding the authenticated sales dashboard. The latest connected endpoint checked on October 6 reports version `6` with `registrationMode: open`. Version `6` and later keep message sending successful when optional notification code is missing or fails. Publishing a new version of an existing deployment retains its URL; if creating a separate deployment, update the frontend endpoint too.
+
+The sales dashboard uses the same `VITE_APPS_SCRIPT_URL`, so no second frontend environment variable is required. Publish local `Code.gs` version `7` and give its deployment owner read access to the supplied sales Sheet. Keep `MESSAGING_SPREADSHEET_ID` pointed at the messaging database. Optional `SALES_SPREADSHEET_ID` and `SALES_SHEET_NAME` belong in Apps Script properties; their supplied defaults already target the sales report. See [apps-script/README.md](apps-script/README.md#sales-dashboard-version-7).
 5. Confirm `GET https://YOUR-STABLE-DOMAIN/api/push` reports `enabled: true`, and Apps Script Triggers/Executions show successful queue delivery.
 
 Use a stable deployment domain for installation and subscriptions. Preview domains can be protected by Vercel authentication; Apps Script and installed apps must be able to reach the chosen domain. Configure deployment protection appropriately for the intended public application endpoint. The relay still requires its own secret for every delivery request. Keep the VAPID keys unchanged across deployments; rotating them requires devices to subscribe again.

@@ -1,0 +1,53 @@
+import { test, expect } from '@playwright/test';
+import { account, connectWorkspace, signIn } from './workspace';
+
+test('incoming messages chime without a push relay, mute persists, and own sends stay quiet', async ({ page }) => {
+  await page.clock.install();
+  await page.addInitScript(() => {
+    const original = AudioContext.prototype.createOscillator;
+    Object.assign(window, { chimes: 0 });
+    AudioContext.prototype.createOscillator = function () {
+      (window as unknown as { chimes: number }).chimes++;
+      return original.call(this);
+    };
+  });
+  const server = await connectWorkspace(page);
+  const sender = server.ok('login', { email: 'one@hays.test', password: account.password });
+  const general = server.ok('bootstrap', {}, sender).conversations.find((c: {name: string}) => c.name === 'general').id;
+  await signIn(page);
+  const menu = page.getByRole('button', { name: 'Open navigation' });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole('button', { name: 'Notifications', exact: true }).click();
+  await expect(page.getByText('Background notifications have not been configured by your administrator.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Test sound', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Test sound played' })).toBeVisible();
+  const chimes = () => page.evaluate(() => (window as unknown as {chimes: number}).chimes);
+  expect(await chimes()).toBe(2);
+  server.ok('sendMessage', { conversationId: general, body: 'Incoming sound check', clientId: 'incoming-chime' }, sender);
+  await page.clock.runFor(16000);
+  await expect.poll(chimes).toBe(4);
+  await page.getByRole('button', { name: 'Mute message sounds' }).click();
+  server.ok('sendMessage', { conversationId: general, body: 'Muted incoming check', clientId: 'muted-chime' }, sender);
+  await page.clock.runFor(16000);
+  expect(await chimes()).toBe(4);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'general', exact: true })).toBeVisible();
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole('button', { name: 'Notifications', exact: true }).click();
+  await expect(page.getByText('Message sounds are off', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Enable message sounds' }).click();
+  await expect(page.getByText('Message sounds are on', { exact: false })).toBeVisible();
+  expect(await chimes()).toBe(2);
+  await page.getByRole('button', { name: 'Close dialog' }).click();
+  const navigation = page.getByRole('dialog', { name: 'Workspace navigation' });
+  if (await navigation.isVisible()) await navigation.getByRole('button', { name: 'Close navigation', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Message #general' }).fill('My message stays quiet');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Message #general' })).toHaveValue('');
+  await page.clock.runFor(16000);
+  expect(await chimes()).toBe(2);
+  const sales = server.ok('bootstrap', {}, sender).conversations.find((c: {name: string}) => c.name === 'sales').id;
+  server.ok('sendMessage', { conversationId: sales, body: 'Other conversation sound check', clientId: 'other-conversation-chime' }, sender);
+  await page.clock.runFor(16000);
+  await expect.poll(chimes).toBe(4);
+});

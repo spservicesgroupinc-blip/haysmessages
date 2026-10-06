@@ -107,7 +107,8 @@ test('installation uses a user action', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Install app', exact: true })).toHaveCount(0);
 });
 
-test('notification opt-in and opt-out persist subscription only after explicit user action', async ({ page }) => {
+test('notification opt-in and opt-out persist subscription only after explicit user action', async ({ page, context }) => {
+  await context.grantPermissions(['notifications'], { origin });
   let subscriptions = 0, unsubscriptions = 0;
   const endpoint = 'https://fcm.googleapis.com/fcm/send/browser-test';
   const publicKey = Buffer.from([4, ...Array(64).fill(1)]).toString('base64url');
@@ -130,6 +131,11 @@ test('notification opt-in and opt-out persist subscription only after explicit u
   await page.getByRole('button', { name: 'Enable notifications', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Notifications are enabled' })).toBeVisible();
   expect(subscriptions).toBe(1);
+  await page.getByRole('button', { name: 'Test device alert', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Test alert sent' })).toBeVisible();
+  await expect.poll(() => page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications()).length)).toBe(1);
+  const silent = await page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications())[0].silent);
+  expect(silent).toBe(false);
   await page.getByRole('button', { name: 'Turn off notifications', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: 'turned off' })).toBeVisible();
   expect(unsubscriptions).toBe(1);

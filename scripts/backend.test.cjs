@@ -50,7 +50,7 @@ test('password resets are editor-only, retain accounts and revoke every session 
 test('public status reports open signup and old registration restrictions cannot block signup', () => {
   const b = backend();
   const status = JSON.parse(b.context.doGet()).data;
-  assert.equal(status.version, 6); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
+  assert.equal(status.version, 7); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
   assert.equal(status.registrationMode, 'open');
   b.properties.set('REGISTRATION_CODE', 'obsolete-code');
   b.properties.set('REGISTRATION_EMAIL_DOMAINS', 'company.test');

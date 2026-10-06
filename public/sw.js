@@ -56,6 +56,8 @@ self.addEventListener('push', event => {
     body,
     icon: '/icons/icon-192.png',
     badge: '/icons/badge-96.png',
+    silent: false,
+    vibrate: [160, 80, 160],
     tag: messageId || conversationId || 'hays-team-message',
     data: { conversationId, messageId },
   }));

@@ -262,6 +262,7 @@ function handle_(payload) {
   switch(payload.action) {
     case 'session':return {user:user};
     case 'bootstrap':return bootstrap_(user);
+    case 'salesDashboard':return salesDashboard_();
     case 'createConversation':return createConversation_(payload,user);
     case 'listMessages':return listMessages_(payload,user);
     case 'getThread':return getThread_(payload,user);
@@ -292,7 +293,66 @@ function doPost(e) {
   } catch(err) { return json_({ok:false,error:err.message||'Request failed.',code:err.code||'server_error'}); }
   finally {if(lock)lock.releaseLock();}
 }
-function doGet() { return json_({ok:true,data:{app:'Hays + Sons Team Messaging',version:6,configured:!!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),usernameType:'email',registrationMode:'open',features:['email-password-auth','open-registration','optional-push-on-send','empty-workspace-setup','message-id-pagination','root-message-pages','web-push']}}); }
+function doGet() { return json_({ok:true,data:{app:'Hays + Sons Team Messaging',version:7,configured:!!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),usernameType:'email',registrationMode:'open',features:['email-password-auth','open-registration','sales-dashboard','optional-push-on-send','empty-workspace-setup','message-id-pagination','root-message-pages','web-push']}}); }
+
+/** Read-only sales report. Uses the messaging session; no second login or public data endpoint. */
+function salesDashboard_() {
+  var props=PropertiesService.getScriptProperties();
+  var id=props.getProperty('SALES_SPREADSHEET_ID')||'1Ba1IEJEOb3ILhsZrOZSHCOT5-6pELnwGT-inUcVMcTk';
+  var tab=props.getProperty('SALES_SHEET_NAME')||'Estimator_Sales_Report.xls (6).csv';
+  var db;
+  try {db=SpreadsheetApp.openById(id);} catch(err) {fail_('sales_access','The sales report cannot be opened. Give the Apps Script deployment owner access to the sales spreadsheet.');}
+  var sheet=db.getSheetByName(tab);
+  if(!sheet)fail_('sales_configuration','The sales report tab was not found. Check SALES_SHEET_NAME in Script Properties.');
+  var count=sheet.getLastRow(),columns=sheet.getLastColumn();
+  if(count>20001)fail_('sales_limit','The sales report exceeds 20,000 rows. Narrow the source report before refreshing.');
+  if(!count || !columns)fail_('sales_headers','The sales report is empty. Add the report column headers to the source sheet.');
+  var values=sheet.getRange(1,1,count,Math.min(columns,60)).getValues();
+  var headers=values[0].map(function(v){return String(v||'').trim().toLowerCase();});
+  var required=['Job Number','Customer','Estimator','Date Received','Division','Total Estimates','Job Status'];
+  var missing=required.filter(function(h){return headers.indexOf(h.toLowerCase())<0;});
+  if(missing.length)fail_('sales_headers','Sales report columns are missing: '+missing.join(', ')+'.');
+  var timezone=db.getSpreadsheetTimeZone(),invalidDates=0,invalidEstimates=0,skippedRows=0;
+  function field(row,name) {var i=headers.indexOf(name.toLowerCase());return i<0 ? '' : row[i];}
+  function text(value,limit) {return value==null ? '' : String(value).trim().slice(0,limit||300);}
+  var jobs=[];
+  values.slice(1).forEach(function(row,index){
+    var number=text(field(row,'Job Number'));
+    if(!number) {if(row.some(function(v){return v!=='' && v!=null;}))skippedRows++;return;}
+    var estimateValue=field(row,'Total Estimates'),estimate=salesAmount_(estimateValue);
+    if(estimate==null && estimateValue!=='' && estimateValue!=null)invalidEstimates++;
+    var receivedValue=field(row,'Date Received'),received=salesDate_(receivedValue,timezone);
+    if(!received && receivedValue!=='' && receivedValue!=null)invalidDates++;
+    var inspectedValue=field(row,'Date Inspected'),inspected=salesDate_(inspectedValue,timezone);
+    if(!inspected && inspectedValue!=='' && inspectedValue!=null)invalidDates++;
+    jobs.push({id:'sales-row-'+(index+2),sourceRow:index+2,jobNumber:number,customer:text(field(row,'Customer')),estimator:text(field(row,'Estimator')),insuranceCarrier:text(field(row,'Insurance Carrier')),primaryAdjuster:text(field(row,'Primary Adjuster')),referredBy:text(field(row,'Referred By')),foreman:text(field(row,'Foreman')),receivedDate:received,division:text(field(row,'Division')),inspectedDate:inspected,marketingPerson:text(field(row,'Marketing Person')),estimate:estimate,status:text(field(row,'Job Status')),closingReason:text(field(row,'Reason For Closing')),journalNote:text(field(row,'Last Journal Note Entered'),12000)});
+  });
+  return {source:{spreadsheetId:id,title:db.getName(),sheetName:tab,sheetId:sheet.getSheetId(),url:db.getUrl()+'#gid='+sheet.getSheetId(),timezone:timezone},fetchedAt:new Date().toISOString(),today:Utilities.formatDate(new Date(),timezone,'yyyy-MM-dd'),jobs:jobs,quality:{invalidDates:invalidDates,invalidEstimates:invalidEstimates,skippedRows:skippedRows}};
+}
+function salesAmount_(value) {
+  if(value==='' || value==null)return null;
+  if(typeof value==='number')return Number.isFinite(value) ? value : null;
+  var raw=String(value).trim().replace(/^\$/, '').replace(/,/g,'');
+  if(/^\(\$?\d+(?:\.\d+)?\)$/.test(raw))raw='-'+raw.slice(1,-1).replace(/^\$/,'');
+  return /^[+-]?\d+(?:\.\d+)?$/.test(raw) && Number.isFinite(Number(raw)) ? Number(raw) : null;
+}
+function salesDate_(value,timezone) {
+  if(value==='' || value==null)return '';
+  if(Object.prototype.toString.call(value)==='[object Date]')return isNaN(value.getTime()) ? '' : Utilities.formatDate(value,timezone,'yyyy-MM-dd');
+  if(typeof value==='number') {
+    if(!Number.isFinite(value) || value<1 || value>2958465)return '';
+    return new Date(Date.UTC(1899,11,30)+Math.floor(value)*86400000).toISOString().slice(0,10);
+  }
+  var raw=String(value).trim(),parts=raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s]|$)/),year,month,day;
+  if(parts){year=Number(parts[1]);month=Number(parts[2]);day=Number(parts[3]);}
+  else {
+    parts=raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})(?:\s|$)/);
+    if(!parts)return '';
+    year=Number(parts[3]);if(year<100)year+=year<70 ? 2000 : 1900;month=Number(parts[1]);day=Number(parts[2]);
+  }
+  var date=new Date(Date.UTC(year,month-1,day));
+  return date.getUTCFullYear()===year && date.getUTCMonth()===month-1 && date.getUTCDate()===day ? date.toISOString().slice(0,10) : '';
+}
 /** Run periodically from the editor or an Apps Script time trigger. */
 function cleanupSessions() {
   var lock=LockService.getScriptLock();lock.waitLock(30000);

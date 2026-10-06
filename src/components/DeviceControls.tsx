@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Bell, BellOff, Download, Loader2, RefreshCw, WifiOff } from 'lucide-react';
+import { Bell, BellOff, Download, Loader2, RefreshCw, Volume2, VolumeX, WifiOff } from 'lucide-react';
 import { Modal } from './Modal';
-import { ApiError, request } from '../lib/api';
+import { ApiError, backendUrl, request } from '../lib/api';
+import { offlineAccount } from '../lib/offline';
+import { listenSoundPreference, playMessageSound, prepareSound, setSoundEnabled, soundEnabled } from '../lib/notificationSound';
 import type { Session } from '../lib/types';
 import { applyPwaUpdate, getPwaState, getServiceWorkerRegistration, installApp, subscribePwa } from '../lib/pwa';
 
@@ -29,6 +31,13 @@ export function DeviceControls({ session }: { session?: Session }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [refresh, setRefresh] = useState(0);
+  const soundAccount = offlineAccount(session?.user.email || '', backendUrl);
+  const [sounds, setSounds] = useState(() => soundEnabled(soundAccount));
+  const [soundNotice, setSoundNotice] = useState('');
+  useEffect(() => {
+    setSounds(soundEnabled(soundAccount));
+    return listenSoundPreference(soundAccount, setSounds);
+  }, [soundAccount]);
   const supported = typeof Notification !== 'undefined' && 'PushManager' in window && 'serviceWorker' in navigator && window.isSecureContext;
   const needsHomeScreen = pwa.isIOS && !pwa.standalone;
   useEffect(() => {
@@ -82,6 +91,18 @@ export function DeviceControls({ session }: { session?: Session }) {
     } catch (e) { setError(message(e)); }
     finally { setBusy(false); }
   }
+  async function testSound() {
+    const ready = await prepareSound();
+    setSoundNotice(ready && playMessageSound(true) ? 'Test sound played. Check your device volume if you did not hear it.' : 'Sound could not start. Check whether this browser tab is muted, then try again.');
+  }
+  async function testDeviceAlert() {
+    if (!registration || Notification.permission !== 'granted') return;
+    setError('');
+    try {
+      await registration.showNotification('Hays + Sons', { body: 'Notification test from this device.', icon: '/icons/icon-192.png', badge: '/icons/badge-96.png', silent: false, tag: 'hays-device-test' });
+      setNotice('Test alert sent to this device. This checks device permissions; incoming alerts also need the workspace delivery service.');
+    } catch (e) { setError(message(e)); }
+  }
   return <>
     <div className={`device-controls ${session ? 'in-workspace' : 'on-auth'}`}>
       {!pwa.standalone && <button className="device-button" onClick={() => void install()}><Download size={16} /> Install app</button>}
@@ -96,12 +117,23 @@ export function DeviceControls({ session }: { session?: Session }) {
       <div className="modal-actions">{pwa.canInstall && <button className="button primary" onClick={() => void install()}><Download size={16} /> Install app</button>}<button className="button" onClick={() => setDialog(null)}>Done</button></div>
     </Modal>}
     {dialog === 'notifications' && <Modal title="Notifications on this device" onClose={() => setDialog(null)}>
-      <p className="muted">Get a background alert for new team messages, even when the app is closed. Alerts keep message contents private. Device settings may affect when they arrive.</p>
+      <h3 className="members-heading">Message sounds</h3>
+      <p className="muted">Play a chime for incoming messages while this app is open. Sounds work without enabling background notifications.</p>
+      <div className="notification-status">{sounds ? <><Volume2 size={19} /> Message sounds are on</> : <><VolumeX size={19} /> Message sounds are off</>}</div>
+      <div className="modal-actions"><button className="button" onClick={() => {
+        setSoundEnabled(soundAccount, !sounds); setSoundNotice('');
+        if (!sounds) void testSound();
+      }}>{sounds ? <VolumeX size={16} /> : <Volume2 size={16} />}{sounds ? 'Mute message sounds' : 'Enable message sounds'}</button><button className="button" onClick={() => void testSound()}><Volume2 size={16} /> Test sound</button></div>
+      {soundNotice && <p className="notice" role="status">{soundNotice}</p>}
+      <h3 className="members-heading">Background notifications</h3>
+      <p className="muted">Get a device alert when the app is closed. Your device controls its sound and vibration. Check notification permissions, volume, and Do Not Disturb if alerts arrive silently.</p>
       {needsHomeScreen ? <><p className="notice">Add this app to your home screen and open it there to enable notifications on iPhone or iPad.</p><button className="button" onClick={() => setDialog('install')}><Download size={16} /> Installation instructions</button></> : !supported ? <p className="notice">Push notifications need a supported browser and a secure app address. Try the installed app in a current version of Chrome, Edge, Firefox, or Safari.</p> : <>
         {busy && !config && <p className="notification-status"><Loader2 size={18} className="spin" /> Checking notification settings…</p>}
-        {config && !config.enabled && <p className="notice">Push notifications have not been enabled for this workspace yet. Your administrator needs to finish the notification service setup.</p>}
+        {config && !config.enabled && <p className="notice">{config.reason || 'Background notifications have not been configured for this workspace.'} Message sounds still work while the app is open.</p>}
         {config?.enabled && <div className="notification-status">{subscribed ? <><Bell size={19} /> Enabled on this device</> : <><BellOff size={19} /> Notifications are off</>}</div>}
         {config?.enabled && registration && <div className="modal-actions"><button className="button primary" disabled={busy || (!subscribed && Notification.permission === 'denied')} onClick={() => void (subscribed ? disable() : enable())}>{busy ? <Loader2 size={16} className="spin" /> : subscribed ? <BellOff size={16} /> : <Bell size={16} />}{subscribed ? 'Turn off notifications' : 'Enable notifications'}</button></div>}
+        {subscribed && registration && <button className="button" disabled={busy || Notification.permission !== 'granted'} onClick={() => void testDeviceAlert()}><Bell size={16} /> Test device alert</button>}
+        <button className="text-button" disabled={busy} onClick={() => setRefresh(n => n + 1)}><RefreshCw size={14} /> Check background delivery again</button>
         {supported && Notification.permission === 'denied' && <p className="notice">Your browser has blocked notifications. Change the permission in its settings to enable them.</p>}
       </>}
       {notice && <p className="notice" role="status">{notice}</p>}

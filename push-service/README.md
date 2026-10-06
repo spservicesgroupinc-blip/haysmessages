@@ -37,6 +37,15 @@ Start with `npm start`. Expose the service through HTTPS. `GET /health` returns 
 
 The UI reports notifications as unavailable until configuration, optional tables, and the trigger exist. This setup never modifies another app's database or Apps Script project.
 
+## Diagnose missing or silent alerts
+
+1. Open **Notifications > Test sound** in the app. This tests the chime while the app is open and works even if the background service is not configured. Check device volume and browser tab mute if the test is silent. Message sound preferences are separate from background opt-in.
+2. Read the **Background notifications** status in the same dialog. It reports the actual backend readiness reason. Missing credentials require the relay configuration above; missing tables or a trigger require `setupPushMessaging()`. Use **Check background delivery again** after correcting setup.
+3. After enabling notifications, choose **Test device alert**. This verifies the device's notification permission and display; it does not send through Apps Script or the relay. The app requests audible alerts, but OS notification sound permissions, Focus/Do Not Disturb, and device volume still control sound.
+4. If that test works but closed-app messages never arrive, verify `GET /api/push` (Vercel) or `GET /health` (standalone) reports `enabled: true` and its public key matches Apps Script. Check the `deliverPushQueue` trigger's Executions for authorization/relay failures. Use two signed-in accounts, enable the recipient's device, close its app, send from the other account, and allow at least one minute for delivery. Sessions expire after 12 hours and must reconnect after signing in again.
+
+The source and automated checks cannot confirm a particular live device or relay without its hosted app address and access to its configuration. No company accounts or notifications are created by automated tests.
+
 ## Delivery and security
 
 - Subscriptions are bound to a user and the current authenticated messaging session. The existing sessions last **12 hours**. After expiry, sign in again and enable/reconnect notifications. Logout revokes that session's subscriptions. This service does not lengthen account access.
