@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "Hays + Sons Team Messaging",
+  "short_name": "Hays Messages",
+  "description": "Team conversations for Hays + Sons Complete Restoration.",
+  "lang": "en-US",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "theme_color": "#dc2626",
+  "background_color": "#ffffff",
+  "categories": ["business", "productivity", "social"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
