@@ -62,7 +62,7 @@ See [apps-script/README.md](apps-script/README.md) for the Users schema, first a
 
 Registration is always open in backend version `5`. Previous registration mode, code, and domain settings are ignored. Existing accounts remain compatible.
 
-The supplied live URL was checked on October 6, 2026 and still reports backend version `4`. Publish the updated `apps-script/Code.gs` as a new version of the existing deployment to enable open signup live. The frontend source and production build now embed the supplied URL as their default, fixing disabled forms when hosting omits the environment variable. Publish the updated frontend build as well if your hosted app still shows the connection warning.
+The updated live URL supplied on October 6, 2026 was checked and reports backend version `5`, `configured: true`, and `registrationMode: open`. Its registration endpoint confirms signup is enabled without invitations. The frontend source, local environment, environment example, and production build all use that updated URL. The default connection works even when hosting omits the environment variable. Publish the updated frontend build if your hosted app still uses a previous URL or shows the connection warning.
 
 ## Operation
 
