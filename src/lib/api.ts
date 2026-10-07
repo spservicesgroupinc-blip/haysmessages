@@ -1,11 +1,12 @@
 import type { Session } from './types';
 import { clearSavedReads, offlineAccount, offlineReadAction, savedRead, saveRead, updateSavedReads } from './offline';
 import { deploymentUrl, resolveBackendUrl } from './connection';
+import { ApiError, fetchWorkspace } from './apiTransport';
+export { ApiError } from './apiTransport';
 
 const KEY='hays.messages.session.v1';
 export const backendUrl=resolveBackendUrl(import.meta.env.VITE_APPS_SCRIPT_URL as string|undefined);
 export const configured=deploymentUrl.test(backendUrl);
-export class ApiError extends Error { constructor(message:string,public code:string){super(message);} }
 export function loadSession():Session|null {
   try {
     // Discard local preview data and sessions saved by earlier versions of the app.
@@ -45,18 +46,19 @@ export async function request<T>(action:string,payload:Record<string,unknown>={}
   signal?.addEventListener('abort',abort,{once:true});
   const timer=window.setTimeout(()=>controller.abort(),30000);
   try {
-    const response=await fetch(backendUrl,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,action,sessionToken:session?.token}),signal:controller.signal,redirect:'follow'});
-    let envelope:{ok:boolean;data:T;error?:string;code?:string};
-    try{envelope=await response.json();}catch{throw new ApiError('The backend did not return JSON. Check the Apps Script web app deployment.','bad_response');}
-    if(!envelope.ok)throw new ApiError(envelope.error||'The request failed.',envelope.code||'unknown');
+    const data=await fetchWorkspace<T>(backendUrl,action,JSON.stringify({...payload,action,sessionToken:session?.token}),controller.signal);
     if(account){
-      if(offlineReadAction(action)){await saveRead(account,action,payload,envelope.data);window.dispatchEvent(new CustomEvent('hays:connected-read'));}
+      if(offlineReadAction(action)){await saveRead(account,action,payload,data);window.dispatchEvent(new CustomEvent('hays:connected-read'));}
       else if(action==='logout')await clearSavedReads(account);
-      else await updateSavedReads(account,action,envelope.data);
+      else await updateSavedReads(account,action,data);
     }
-    return envelope.data;
+    return data;
   }catch(error){
-    if(error instanceof ApiError)throw error;
+    if(error instanceof ApiError){
+      if(['backend_unavailable','backend_throttled'].includes(error.code)&&!signal?.aborted){const value=await cached();if(value!==null)return value;}
+      throw error;
+    }
+    if(signal?.aborted)throw new DOMException('Request cancelled','AbortError');
     if(!signal?.aborted){const value=await cached();if(value!==null)return value;}
     throw new ApiError(error instanceof DOMException && error.name==='AbortError'?'The request timed out. Please try again.':'Could not connect. Check your connection and try again.','network_error');
   }finally{window.clearTimeout(timer);signal?.removeEventListener('abort',abort);}
