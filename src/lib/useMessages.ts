@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Message, Person } from './types';
+import { useDelivery } from '../components/MessageDelivery';
+import { mergeMessages } from './delivery';
+export { mergeMessages } from './delivery';
 
 export type ApiCall = <T>(action: string, payload?: Record<string, unknown>, signal?: AbortSignal) => Promise<T>;
 interface Page { messages: Message[]; hasMore: boolean; nextBeforeId?: string; readThrough?: string }
-export function mergeMessages(previous: Message[], incoming: Message[]) {
-  const map = new Map(previous.map(m => [m.id, m]));
-  incoming.forEach(m => map.set(m.id, m));
-  return [...map.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-}
 export function useMessages(api: ApiCall, conversationId: string, query: string, onRead: (id: string) => void, user: Person) {
+  const { send: deliver, observe, outgoing } = useDelivery();
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -34,6 +33,7 @@ export function useMessages(api: ApiCall, conversationId: string, query: string,
       try {
         const page = await api<Page>('listMessages', { conversationId, query }, controller.signal);
         if (stopped || mutation !== revision.current) return;
+        observe(page.messages);
         setMessages(old => query || first ? page.messages : mergeMessages(old, page.messages));
         if (first) { setHasMore(page.hasMore); cursor.current = historyCursor(page); first = false; }
         setError('');
@@ -47,27 +47,18 @@ export function useMessages(api: ApiCall, conversationId: string, query: string,
     }
     void load();
     return () => { stopped = true; if (epoch.current === version) epoch.current++; controller.abort(); window.clearTimeout(timer); };
-  }, [api, conversationId, query, refresh]);
+  }, [api, conversationId, query, refresh, observe]);
   const visibleNow = useCallback((list: Message[]) => query ? list.filter(m => !m.deleted && m.body.toLowerCase().includes(query.toLowerCase())) : list, [query]);
   const update = useCallback((incoming: Message[]) => {
     revision.current++;
+    observe(incoming);
     setMessages(old => visibleNow(mergeMessages(old, incoming)));
-  }, [visibleNow]);
+  }, [visibleNow, observe]);
   async function send(body: string, clientId: string) {
     const version = epoch.current;
     revision.current++;
-    // Show the message immediately so the slow Apps Script round trip cannot
-    // delay the conversation; the request replaces it once the server confirms.
-    const optimistic: Message = { id: `pending:${clientId}`, conversationId, authorEmail: user.email, authorName: user.name, body, createdAt: new Date().toISOString(), updatedAt: '', deleted: false, parentId: '', reactions: {}, clientId, pending: 'sending' };
-    setMessages(old => visibleNow(mergeMessages(old, [optimistic])));
-    try {
-      const message = await api<Message>('sendMessage', { conversationId, body, clientId });
-      if (version === epoch.current) setMessages(old => visibleNow(mergeMessages(old.filter(m => m.id !== optimistic.id), [message])));
-    } catch (error) {
-      // Restore the previous view; Composer keeps the text for a retry with the same identifier.
-      if (version === epoch.current) setMessages(old => old.filter(m => m.id !== optimistic.id));
-      throw error;
-    }
+    const message = await deliver(conversationId, body, clientId);
+    if (version === epoch.current) update([message]);
   }
   async function mutate(action: string, message: Message, value?: string) {
     const version = epoch.current;
@@ -89,7 +80,7 @@ export function useMessages(api: ApiCall, conversationId: string, query: string,
     } catch (e) { if (version === epoch.current) setError(report(e)); }
     finally { if (version === epoch.current) { olderBusy.current = false; setOlderLoading(false); } }
   }
-  return { messages, hasMore, loading, olderLoading, error, send, mutate, update, loadOlder, retry: () => setRefresh(n => n + 1) };
+  return { messages: visibleNow(mergeMessages(outgoing.filter(m => m.conversationId === conversationId), messages)), hasMore, loading, olderLoading, error, send, mutate, update, loadOlder, retry: () => setRefresh(n => n + 1) };
 }
 function historyCursor(page:Page):Record<string,string> {
   if(page.nextBeforeId)return {beforeId:page.nextBeforeId};

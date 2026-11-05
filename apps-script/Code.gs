@@ -1,5 +1,5 @@
 /**
- * Hays + Sons Team Messaging - Enterprise Suite (Version 8.2 - Cached and Consistent)
+ * Hays + Sons Team Messaging - Enterprise Suite (Version 8.3 - Chat Space Management)
  * 
  * SETUP INSTRUCTIONS:
  * 1. Deploy in an Apps Script project.
@@ -11,7 +11,7 @@
 var SCHEMA = {
   Users: ['Email','Name','Role','Salt','PasswordHash','Active','FailedAttempts','LockedUntil'],
   Sessions: ['TokenHash','Email','ExpiresAt'],
-  Conversations: ['Id','Name','Description','Kind','MembersJson','CreatedBy','CreatedAt'],
+  Conversations: ['Id','Name','Description','Kind','MembersJson','CreatedBy','CreatedAt','DeletedAt'],
   Messages: ['Id','ConversationId','AuthorEmail','AuthorName','Body','CreatedAt','UpdatedAt','Deleted','ParentId','ReactionsJson','ClientId','AttachmentJson'],
   ReadReceipts: ['Email','ConversationId','ReadThrough']
 };
@@ -27,7 +27,7 @@ var PASSWORD_ITERATIONS = 1500;
 // Drive uploads and cache-only heartbeats do not need the spreadsheet lock.
 var MUTATIONS = [
   'login','register','logout','changePassword','updateProfile',
-  'createConversation','leaveConversation','sendMessage','editMessage',
+  'createConversation','deleteConversation','leaveConversation','sendMessage','editMessage',
   'deleteMessage','react','markRead','subscribePush','unsubscribePush'
 ];
 
@@ -419,13 +419,14 @@ function conversation_(row) {
     members: storedList_(row[4]),
     createdBy: String(row[5]),
     createdAt: String(row[6]),
+    deletedAt: String(row[7] || ''),
     lastActivity: String(row[6]),
     unread: 0
   };
 }
 
 function visible_(conversation, user) {
-  return conversation.kind === 'channel' || conversation.members.indexOf(user.email) >= 0;
+  return !conversation.deletedAt && (conversation.kind === 'channel' || conversation.members.indexOf(user.email) >= 0);
 }
 
 function requireConversation_(id, user) {
@@ -519,15 +520,32 @@ function createConversation_(payload, user) {
   if (kind === 'channel') {
     name = name.toLowerCase().replace(/\s+/g, '-');
     if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(name)) fail_('bad_request', 'Channel names must use lowercase letters, numbers, and hyphens.');
-    if (rows_(sheet_('Conversations')).some(function(r) { return r[3] === 'channel' && r[1] === name; })) {
+    if (rows_(sheet_('Conversations')).some(function(r) { return r[3] === 'channel' && r[1] === name && !r[7]; })) {
       fail_('duplicate', 'A channel with that name already exists.');
     }
   }
   
-  var row = [Utilities.getUuid(), cell_(name), cell_(description), kind, JSON.stringify(members), user.email, new Date().toISOString()];
+  var row = [Utilities.getUuid(), cell_(name), cell_(description), kind, JSON.stringify(members), user.email, new Date().toISOString(), ''];
   sheet_('Conversations').appendRow(row);
   invalidateSheetCache_('Conversations');
   return conversation_(row);
+}
+
+function deleteConversation_(payload, user) {
+  var sheet = sheet_('Conversations'), records = rows_(sheet);
+  var index = records.findIndex(function(r) { return r[0] === payload.conversationId; });
+  var c = index >= 0 ? conversation_(records[index]) : null;
+  // Check membership even for administrators; private groups stay private.
+  if (!c || (c.kind !== 'channel' && c.members.indexOf(user.email) < 0)) fail_('forbidden', 'Conversation not found or access denied.');
+  if (c.kind === 'dm') fail_('bad_request', 'Direct messages cannot be deleted for other teammates.');
+  if (c.createdBy !== user.email && user.role !== 'admin') fail_('forbidden', 'Only the creator or an administrator can delete this chat space.');
+  if (!c.deletedAt) {
+    // Older deployments have seven columns. Preserve all existing rows and history.
+    sheet.getRange(1, 8).setValue('DeletedAt');
+    sheet.getRange(index + 2, 8).setValue(new Date().toISOString());
+    invalidateSheetCache_('Conversations');
+  }
+  return { ok: true, conversationId: c.id };
 }
 
 function leaveConversation_(payload, user) {
@@ -541,7 +559,7 @@ function leaveConversation_(payload, user) {
   var members = c.members.filter(function(e) { return e !== user.email; });
   sheet.getRange(index + 2, 5).setValue(JSON.stringify(members));
   invalidateSheetCache_('Conversations');
-  return { ok: true };
+  return { ok: true, conversationId: c.id };
 }
 
 function listMessages_(payload, user) {
@@ -1253,6 +1271,7 @@ function handle_(payload) {
     case 'salesDashboard': return salesDashboard_(payload);
     
     case 'createConversation': return createConversation_(payload, user);
+    case 'deleteConversation': return deleteConversation_(payload, user);
     case 'leaveConversation': return leaveConversation_(payload, user);
     case 'listMessages': return listMessages_(payload, user);
     case 'searchMessages': return searchMessages_(payload, user);
@@ -1327,13 +1346,13 @@ function doGet() {
     ok: true,
     data: {
       app: 'Hays + Sons Team Messaging',
-      version: 8.2,
+      version: 8.3,
       configured: !!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),
       usernameType: 'email',
       features: [
         'email-password-auth','open-or-invite-registration','profile-management',
         'sales-dashboard','sales-aggregations','realtime-presence','drive-attachments',
-        'global-search','batch-pruning','web-push-relay','thread-paging'
+        'global-search','batch-pruning','web-push-relay','thread-paging','chat-space-management'
       ]
     }
   });

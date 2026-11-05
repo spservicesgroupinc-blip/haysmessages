@@ -18,7 +18,7 @@ test('incoming messages chime without a push relay, mute persists, and own sends
   const menu = page.getByRole('button', { name: 'Open navigation' });
   if (await menu.isVisible()) await menu.click();
   await page.getByRole('button', { name: 'Notifications', exact: true }).click();
-  await expect(page.getByText('Background notifications have not been configured by your administrator.', { exact: false })).toBeVisible();
+  await expect(page.getByText('Web push not configured in script properties. Message sounds still work while the app is open.', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Test sound', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Test sound played' })).toBeVisible();
   const chimes = () => page.evaluate(() => (window as unknown as {chimes: number}).chimes);

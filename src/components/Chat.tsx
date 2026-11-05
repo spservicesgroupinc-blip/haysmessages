@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Loader2, MessageSquare, Pencil, Send, SmilePlus, Trash2, X } from 'lucide-react';
 import type { Message, Person } from '../lib/types';
 import { Modal } from './Modal';
+import { useDelivery } from './MessageDelivery';
 
 export const EMOJI:Record<string,string>={thumbsup:'👍',heart:'❤️',check:'✅',eyes:'👀'};
 export function Avatar({name,small=false}:{name:string;small?:boolean}) {
@@ -13,12 +14,26 @@ function readDraft(key:string):{body:string;id:string}|null {
   try {const draft=JSON.parse(sessionStorage.getItem(`hays.draft:${key}`)||'null');return typeof draft?.body==='string'&&typeof draft?.id==='string'?draft:null;}catch{return null;}
 }
 export function Composer({label,onSend,draftKey}:{label:string;draftKey:string;onSend:(body:string,clientId:string)=>Promise<void>}) {
+  const {outgoing}=useDelivery();
   const inputId=useId();
-  const [body,setBody]=useState(()=>readDraft(draftKey)?.body||'');
+  const [body,setBody]=useState(()=>{const draft=readDraft(draftKey);return outgoing.some(m=>m.clientId===draft?.id&&m.pending==='sending')?'':draft?.body||'';});
   const [sending,setSending]=useState(0);
   const [error,setError]=useState('');
   const retry=useRef<{body:string;id:string}|null>(readDraft(draftKey));
   function persist(text:string,id:string) {try{if(text)sessionStorage.setItem(`hays.draft:${draftKey}`,JSON.stringify({body:text,id}));else sessionStorage.removeItem(`hays.draft:${draftKey}`);}catch{/* Keep the in-memory draft when storage is unavailable. */}}
+  useEffect(()=>{
+    const delivered=(event:Event)=>{
+      const message=(event as CustomEvent<Message>).detail;
+      const key=`${message.authorEmail}:${message.conversationId}${message.parentId?`:${message.parentId}`:''}`;
+      if(key!==draftKey)return;
+      if(readDraft(draftKey)?.id===message.clientId)persist('','');
+      if(retry.current?.id===message.clientId){
+        retry.current=null;setError('');setBody(current=>current.trim()===message.body?'':current);
+      }
+    };
+    window.addEventListener('hays:message-delivered',delivered);
+    return ()=>window.removeEventListener('hays:message-delivered',delivered);
+  },[draftKey]);
   async function send(event?:React.FormEvent){
     event?.preventDefault();
     const text=body.trim();if(!text)return;
@@ -45,6 +60,7 @@ export function Composer({label,onSend,draftKey}:{label:string;draftKey:string;o
 }
 
 export function MessageCard({message,user,replyCount=0,onThread,onAction,threadView=false}:{message:Message;user:Person;replyCount?:number;threadView?:boolean;onThread:(id:string)=>void;onAction:(action:string,message:Message,value?:string)=>Promise<void>}) {
+  const delivery=useDelivery();
   const [reacting,setReacting]=useState(false);
   const [editing,setEditing]=useState(false);
   const [deleting,setDeleting]=useState(false);
@@ -58,10 +74,10 @@ export function MessageCard({message,user,replyCount=0,onThread,onAction,threadV
     setBusy(true);setError('');
     try{await onAction(name,message,value);setEditing(false);setDeleting(false);setReacting(false);}catch(e){setError(e instanceof Error?e.message:'Request failed.');}finally{setBusy(false);}
   }
-  return <article className={`message ${message.deleted?'deleted':''}${pending?' pending':''}`} aria-busy={pending||undefined}>
+  return <article className={`message ${message.deleted?'deleted':''}${pending?' pending':''}`} aria-busy={message.pending==='sending'||undefined}>
     <Avatar name={message.authorName}/>
     <div className="message-content">
-      <div className="message-meta"><strong>{message.authorName}</strong><time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>{time}</time>{pending?<span className="pending-note"><Loader2 className="spin" size={11}/> Sending…</span>:message.updatedAt && message.updatedAt!==message.createdAt && !message.deleted && <span className="edited">edited</span>}</div>
+      <div className="message-meta"><strong>{message.authorName}</strong><time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>{time}</time>{message.pending==='sending'?<span className="pending-note"><Loader2 className="spin" size={11}/> Sending…</span>:message.pending==='failed'?<span className="failed-note">Not sent</span>:message.updatedAt && message.updatedAt!==message.createdAt && !message.deleted && <span className="edited">edited</span>}</div>
       {editing ? <form className="inline-edit" onSubmit={e=>{e.preventDefault();void action('editMessage',editText);}}><textarea value={editText} onChange={e=>setEditText(e.target.value)} maxLength={4000} required aria-label="Edit message" autoFocus/><div><button className="button primary compact" disabled={busy||!editText.trim()}><Check size={15}/> Save</button><button type="button" className="button compact" onClick={()=>setEditing(false)}>Cancel</button></div></form> : <p className="message-body">{message.deleted?'This message was removed.':message.body}</p>}
       {!message.deleted && !pending && <>
         <div className="reactions">{Object.entries(message.reactions).filter(([,people])=>people.length).map(([emoji,people])=><button disabled={busy} className={people.includes(user.email)?'reaction active':'reaction'} key={emoji} title={`${people.length} reaction${people.length===1?'':'s'}`} aria-label={`React ${emoji}, ${people.length}`} aria-pressed={people.includes(user.email)} onClick={()=>void action('react',emoji)}>{EMOJI[emoji]} <span>{people.length}</span></button>)}</div>
@@ -69,6 +85,7 @@ export function MessageCard({message,user,replyCount=0,onThread,onAction,threadV
         {reacting && <div className="reaction-picker">{Object.entries(EMOJI).map(([key,emoji])=><button disabled={busy} key={key} aria-label={`React ${key}`} onClick={()=>void action('react',key)}>{emoji}</button>)}<button aria-label="Close reactions" onClick={()=>setReacting(false)}><X size={14}/></button></div>}
       </>}
       {message.deleted && replyCount>0 && !threadView && <button className="text-button" onClick={()=>onThread(message.id)}><MessageSquare size={13}/>{replyCount} {replyCount===1?'reply':'replies'}</button>}
+      {message.pending==='failed' && <div className="failed-delivery"><p>{message.deliveryError}</p><button className="button compact" aria-label="Retry sending" onClick={()=>{void delivery.send(message.conversationId,message.body,message.clientId,message.parentId).catch(()=>{});}}>Retry sending</button></div>}
       {error && <p className="error" role="alert">{error}</p>}
     </div>
     {deleting && <Modal title="Remove this message?" onClose={()=>setDeleting(false)}><p className="muted">This removes the message for everyone in the conversation. Thread replies remain available.</p><div className="modal-actions"><button className="button" onClick={()=>setDeleting(false)}>Cancel</button><button className="button primary" disabled={busy} onClick={()=>void action('deleteMessage')}>{busy?'Removing…':'Remove message'}</button></div></Modal>}

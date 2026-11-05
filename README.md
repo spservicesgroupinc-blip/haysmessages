@@ -13,6 +13,18 @@ Open http://localhost:3001 and sign in with your email address and messaging pas
 
 Local preview accounts, messages, banners, and the preview entry point have been removed. Existing preview sessions, data, and drafts are cleared when the updated app opens. A newly initialized backend starts with empty tables: create your first channel after signing in. Existing Sheet accounts and conversations remain available.
 
+## Chat spaces (local backend version 8.3)
+
+Use **Add chat space** to create a channel for a project, crew, or topic. The same dialog offers private group messages and direct messages. Channels are shared with the whole workspace; group messages include only the selected teammates.
+
+Open a space and choose **Manage** (the information button on mobile). Its creator or an administrator with access can choose **Delete chat space** and confirm **Delete for everyone**. Other group members can choose **Leave group**. Direct messages cannot be deleted for another person. Failed actions keep the space open and explain the error.
+
+Deleting a channel or group removes it from navigation, message reads, search, unread counts, and queued push delivery for everyone. Existing history stays in the spreadsheet for retention, marked by the trailing `Conversations.DeletedAt` column. A deleted channel name can be reused; the replacement gets a new identifier and empty history. Leaving a group removes only the leaving member. Connected clients reconcile changes on the next workspace refresh; clients that are completely offline cannot receive remote deletions until reconnecting. Saved reads on a device are removed after a successful delete/leave or a workspace refresh that revokes access.
+
+Publish the complete updated `apps-script/Code.gs` as a **new version of the existing messaging deployment** before using deletion with company data. Version 8.3 advertises `chat-space-management`. Seven-column conversation sheets upgrade without removing existing rows. These local changes do not update the live backend automatically. Older backends display an update-required error if deletion is attempted.
+
+Outgoing messages and thread replies appear immediately with **Sending…**, and remain visible while switching conversations or closing/reopening a thread. You can continue composing while requests finish. Polling reconciles saved messages by author and client identifier so an early read cannot duplicate the pending bubble. A failed message stays visible with **Not sent** and **Retry sending**; retries reuse its identifier. Delivery state lasts for the signed-in workspace session; this is not a service-worker outbox that continues after the tab closes. Draft recovery remains available through session storage.
+
 ## Install on desktop or mobile
 
 For Vercel hosting, follow [VERCEL.md](VERCEL.md). The same project can host the frontend and `/api/push`; the standalone Node relay is optional.
