@@ -38,7 +38,12 @@ export async function saveRead(account: string, action: string, payload: Record<
       const tx = db!.transaction(STORE, 'readwrite'); const store = tx.objectStore(STORE);
       store.put({ key: keyFor(account, action, payload), account, action, payload, data, savedAt: Date.now() } satisfies CachedRead);
       const rows = store.index('account').getAll(account);
-      rows.onsuccess = () => (rows.result as CachedRead[]).sort((a, b) => b.savedAt - a.savedAt).slice(MAX_READS).forEach(row => store.delete(row.key));
+      rows.onsuccess = () => {
+        const visible = action === 'bootstrap' ? new Set((data as Bootstrap).conversations.map(c => c.id)) : null;
+        (rows.result as CachedRead[]).sort((a, b) => b.savedAt - a.savedAt).forEach((row, index) => {
+          if (index >= MAX_READS || (visible && row.payload.conversationId && !visible.has(String(row.payload.conversationId)))) store.delete(row.key);
+        });
+      };
       tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error);
     });
   } catch { /* Storage failure must not prevent a connected workspace from working. */ }
@@ -58,8 +63,8 @@ export async function clearSavedReads(account: string) {
   finally { db?.close(); }
 }
 export function offlineAccount(email: string, backend: string) { return `${backend}|${email}`; }
-export async function updateSavedReads(account: string, action: string, data: unknown) {
-  if (!['sendMessage', 'editMessage', 'deleteMessage', 'react', 'createConversation'].includes(action)) return;
+export async function updateSavedReads(account: string, action: string, data: unknown, payload: Record<string, unknown> = {}) {
+  if (!['sendMessage', 'editMessage', 'deleteMessage', 'react', 'createConversation', 'deleteConversation', 'leaveConversation'].includes(action)) return;
   let db: IDBDatabase | undefined;
   try {
     db = await open();
@@ -68,7 +73,14 @@ export async function updateSavedReads(account: string, action: string, data: un
       const reads = store.index('account').getAll(account);
       reads.onsuccess = () => {
         for (const row of reads.result as CachedRead[]) {
-          if (action === 'createConversation') {
+          if (action === 'deleteConversation' || action === 'leaveConversation') {
+            const id = String(payload.conversationId || '');
+            if (row.action === 'bootstrap') {
+              const bootstrap = row.data as Bootstrap;
+              row.data = { ...bootstrap, conversations: bootstrap.conversations.filter(c => c.id !== id) };
+            } else if (row.payload.conversationId === id) { store.delete(row.key); continue; }
+            else continue;
+          } else if (action === 'createConversation') {
             if (row.action !== 'bootstrap') continue;
             const bootstrap = row.data as Bootstrap; const conversation = data as Conversation;
             row.data = { ...bootstrap, conversations: [...bootstrap.conversations.filter(c => c.id !== conversation.id), conversation] };

@@ -123,6 +123,18 @@ test('message retries queue once, exclude author and outsiders, suppress read an
   assert.equal(b.fetches.length, 1); assert.equal(b.sheets.get('PushQueue').data.length, 1);
 });
 
+test('deleted chat spaces suppress queued notifications for all former participants', () => {
+  const b = backend(); b.setup(); const a = b.user('a@hays.test'), c = b.user('c@hays.test');
+  b.subscribe(c);
+  const channel = b.ok('createConversation', { kind: 'channel', name: 'finished-project' }, a);
+  b.ok('sendMessage', { conversationId: channel.id, body: 'Project update', clientId: 'closed-project' }, a);
+  assert.equal(b.sheets.get('PushQueue').data.length, 2);
+  b.ok('deleteConversation', { conversationId: channel.id }, a);
+  b.context.deliverPushQueue();
+  assert.equal(b.fetches.length, 0);
+  assert.equal(b.sheets.get('PushQueue').data.length, 1);
+});
+
 test('partial delivery retries only failed endpoints and prunes gone subscriptions', () => {
   const b = backend(); b.setup(); const a = b.user('a@hays.test'), c = b.user('c@hays.test'), d = b.user('d@hays.test');
   const subC = b.subscribe(c), subD = b.subscribe(d);

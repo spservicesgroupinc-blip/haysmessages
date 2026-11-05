@@ -50,7 +50,7 @@ export async function request<T>(action:string,payload:Record<string,unknown>={}
     if(account){
       if(offlineReadAction(action)){await saveRead(account,action,payload,data);window.dispatchEvent(new CustomEvent('hays:connected-read'));}
       else if(action==='logout')await clearSavedReads(account);
-      else await updateSavedReads(account,action,data);
+      else await updateSavedReads(account,action,data,payload);
     }
     return data;
   }catch(error){
