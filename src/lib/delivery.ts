@@ -39,6 +39,7 @@ export function createDelivery(api: SendApi, user: Person, onDelivered: (message
     for (const message of incoming) {
       const key = identity(message);
       if (inFlight.has(key)) observed.set(key, message);
+      pictures.delete(key);
       const existing = messages.find(m => identity(m) === key);
       if (existing) {
         messages = messages.filter(m => identity(m) !== key);
