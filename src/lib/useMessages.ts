@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Message, Person } from './types';
 import { useDelivery } from '../components/MessageDelivery';
 import { mergeMessages } from './delivery';
+import { startPolling } from './polling';
+import { isCachedRead } from './api';
 export { mergeMessages } from './delivery';
 
 export type ApiCall = <T>(action: string, payload?: Record<string, unknown>, signal?: AbortSignal) => Promise<T>;
 interface Page { messages: Message[]; hasMore: boolean; nextBeforeId?: string; readThrough?: string }
-export function useMessages(api: ApiCall, conversationId: string, query: string, onRead: (id: string) => void, user: Person) {
+export function useMessages(api: ApiCall, conversationId: string, query: string, onRead: (id: string, through: string) => void, user: Person) {
   const { send: deliver, observe, outgoing } = useDelivery();
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -22,7 +24,8 @@ export function useMessages(api: ApiCall, conversationId: string, query: string,
   const readThrough = useRef('');
   const report = (e: unknown) => e instanceof Error ? e.message : 'Could not load messages.';
   useEffect(() => {
-    let stopped = false; let timer: number;
+    let stopped = false, markingRead = false;
+    let readRetryAt = 0;
     const version = ++epoch.current;
     const controller = new AbortController();
     let first = true;
@@ -38,15 +41,18 @@ export function useMessages(api: ApiCall, conversationId: string, query: string,
         if (first) { setHasMore(page.hasMore); cursor.current = historyCursor(page); first = false; }
         setError('');
         const through = page.readThrough || page.messages.at(-1)?.createdAt;
-        if (navigator.onLine && !query && document.visibilityState === 'visible' && through && through !== readThrough.current) {
-          await api('markRead', { conversationId, through }, controller.signal);
-          if (!stopped) { readThrough.current = through; readRef.current(conversationId); }
+        if (navigator.onLine && !isCachedRead(page) && !query && document.visibilityState === 'visible' && through && through !== readThrough.current && !markingRead && Date.now() >= readRetryAt) {
+          markingRead = true;
+          void api('markRead', { conversationId, through }, controller.signal).then(() => {
+            if (!stopped) { readThrough.current = through; readRef.current(conversationId, through); }
+          }).catch(() => { readRetryAt = Date.now() + 5000; }).finally(() => { markingRead = false; });
         }
-      } catch (e) { if (!stopped) setError(report(e)); }
-      finally { if (!stopped) { setLoading(false); timer = window.setTimeout(load, 8000); } }
+        return !isCachedRead(page);
+      } catch (e) { if (!stopped) setError(report(e)); return false; }
+      finally { if (!stopped) setLoading(false); }
     }
-    void load();
-    return () => { stopped = true; if (epoch.current === version) epoch.current++; controller.abort(); window.clearTimeout(timer); };
+    const stopPolling = startPolling(load, { interval: 2000, hiddenInterval: 15000 });
+    return () => { stopped = true; stopPolling(); if (epoch.current === version) epoch.current++; controller.abort(); };
   }, [api, conversationId, query, refresh, observe]);
   const visibleNow = useCallback((list: Message[]) => query ? list.filter(m => !m.deleted && m.body.toLowerCase().includes(query.toLowerCase())) : list, [query]);
   const update = useCallback((incoming: Message[]) => {

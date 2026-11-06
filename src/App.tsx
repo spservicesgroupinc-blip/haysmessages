@@ -7,11 +7,13 @@ import { Modal } from './components/Modal';
 import { ConversationDetails } from './components/ConversationDetails';
 import { MessageDelivery, useDelivery } from './components/MessageDelivery';
 import { DeviceControls, PwaStatus } from './components/DeviceControls';
-import { ApiError, backendUrl, loadSession, request, storeSession } from './lib/api';
+import { ApiError, backendUrl, isCachedRead, loadSession, request, storeSession } from './lib/api';
 import { clearSavedReads, offlineAccount } from './lib/offline';
 import type { Bootstrap, Conversation, Message, Person, Session } from './lib/types';
 import { mergeMessages, useMessages, type ApiCall } from './lib/useMessages';
-import { createMessageAlerts } from './lib/messageAlerts';
+import { createMessageAlerts, type IncomingNotice } from './lib/messageAlerts';
+import { startPolling } from './lib/polling';
+import { MessageToasts } from './components/MessageToasts';
 import { listenSoundPreference, playMessageSound, prepareSound, soundEnabled } from './lib/notificationSound';
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : 'Something went wrong. Please try again.';
@@ -54,9 +56,16 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
   const [refresh, setRefresh] = useState(0);
   const mounted = useRef(true);
   const revision = useRef(0);
+  const [notices, setNotices] = useState<(IncomingNotice & { key: number })[]>([]);
+  const noticeKey = useRef(0);
+  const readMarkers = useRef(new Map<string, string>());
   const soundAccount = offlineAccount(session.user.email, backendUrl);
   const sounds = useRef(soundEnabled(soundAccount));
-  const alerts = useRef(createMessageAlerts(session.user.email, () => { if (sounds.current) playMessageSound(); }));
+  const [alerts] = useState(() => createMessageAlerts(session.user.email, notice => {
+    if (sounds.current) playMessageSound();
+    const next = { ...notice, key: ++noticeKey.current };
+    setNotices(previous => [{ ...next, key: previous.find(item => item.conversationId === notice.conversationId)?.key || next.key }, ...previous.filter(item => item.conversationId !== notice.conversationId)].slice(0, 3));
+  }));
   useEffect(() => {
     const stop = listenSoundPreference(soundAccount, enabled => { sounds.current = enabled; });
     const unlock = () => { if (sounds.current) void prepareSound(); };
@@ -82,10 +91,10 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
   const api: ApiCall = useCallback(async <T,>(action: string, payload: Record<string, unknown> = {}, signal?: AbortSignal) => {
     try {
       const result = await request<T>(action, payload, session, signal);
-      if (mounted.current && navigator.onLine && !signal?.aborted) {
-        if (action === 'bootstrap') alerts.current.bootstrap((result as Bootstrap).conversations);
+      if (mounted.current && navigator.onLine && !isCachedRead(result) && !signal?.aborted) {
+        if (action === 'bootstrap') alerts.bootstrap((result as Bootstrap).conversations);
         if ((action === 'listMessages' || action === 'getThread') && !payload.query && !payload.before && !payload.beforeId) {
-          alerts.current.messages(String(payload.conversationId), (result as {messages: Message[]}).messages, `${action}:${payload.conversationId}:${payload.parentId || ''}`);
+          alerts.messages(String(payload.conversationId), (result as {messages: Message[]}).messages, `${action}:${payload.conversationId}:${payload.parentId || ''}`);
         }
       }
       return result;
@@ -110,26 +119,25 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
   }, [mobileNav, desktop]);
   useEffect(() => {
     let stopped = false;
-    let timer: number;
     const controller = new AbortController();
     async function load() {
       const version = revision.current;
       try {
         const next = await api<Bootstrap>('bootstrap', {}, controller.signal);
         if (stopped || version !== revision.current) return;
-        setData(next); setError('');
+        setData({ ...next, conversations: next.conversations.map(c => c.lastActivity <= (readMarkers.current.get(c.id) || '') ? { ...c, unread: 0 } : c) }); setError('');
         setSelected(previous => next.conversations.some(c => c.id === previous) ? previous : next.conversations.find(c => c.name === 'general')?.id || next.conversations[0]?.id || '');
-      } catch (e) { if (!stopped) setError(errorText(e)); }
-      finally { if (!stopped) timer = window.setTimeout(load, 15000); }
+        return !isCachedRead(next);
+      } catch (e) { if (!stopped) setError(errorText(e)); return false; }
     }
-    void load();
-    return () => { stopped = true; controller.abort(); window.clearTimeout(timer); };
+    const stopPolling = startPolling(load, { interval: 5000, hiddenInterval: 30000 });
+    return () => { stopped = true; stopPolling(); controller.abort(); };
   }, [api, refresh]);
-  const markRead = useCallback((id: string) => {
-    alerts.current.read(id);
-    revision.current++;
+  const markRead = useCallback((id: string, through: string) => {
+    alerts.read(id);
+    readMarkers.current.set(id, through);
     setData(previous => previous && { ...previous, conversations: previous.conversations.map(c => c.id === id ? { ...c, unread: 0 } : c) });
-  }, []);
+  }, [alerts]);
   function choose(id: string) {
     setSelected(id); setPage('messages'); setMobileNav(false);
     const url = new URL(window.location.href); url.searchParams.set('conversation', id); url.searchParams.delete('page'); history.replaceState(null, '', url);
@@ -191,6 +199,10 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
       {error && <div className="workspace-error" role="alert"><span>{error}</span><button className="text-button" onClick={() => setRefresh(n => n + 1)}>Retry</button></div>}
       {page === 'sales' ? <Suspense fallback={<div className="workspace-empty" role="status"><Loader2 className="spin" /><p>Loading sales dashboard</p></div>}><SalesDashboard api={api} onMenu={() => setMobileNav(true)} /></Suspense> : active ? <ConversationView key={active.id} conversation={active} title={conversationName(active, people, user.email)} people={people} user={user} api={api} onRead={markRead} onMenu={() => setMobileNav(true)} onRemoved={removeConversation} /> : <div className="workspace-empty"><button className="icon-button mobile-only" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu /></button>{!data ? <><Loader2 className="spin" /><h2>Loading your workspace</h2></> : <><MessageSquare size={36} /><h2>Welcome to your workspace</h2><p>Create a channel or message a teammate to get started.</p><button className="button primary" onClick={() => setCreate('channel')}>Create a channel</button></>}</div>}
     </main>
+    <MessageToasts notices={notices.flatMap(notice => {
+      const conversation = data?.conversations.find(c => c.id === notice.conversationId);
+      return conversation ? [{ ...notice, title: `${conversation.kind === 'channel' ? '#' : ''}${conversationName(conversation, people, user.email)}` }] : [];
+    })} onOpen={notice => { choose(notice.conversationId); setNotices(previous => previous.filter(item => item.key !== notice.key)); }} onDismiss={key => setNotices(previous => previous.filter(item => item.key !== key))} />
     {create && <CreateConversation kind={create} people={people} user={user} api={api} onClose={() => setCreate(null)} onCreated={c => {
       revision.current++;
       setData(previous => previous && { ...previous, conversations: [...previous.conversations.filter(existing => existing.id !== c.id), c] });
@@ -199,7 +211,7 @@ function Workspace({ session, onExpire, onLogout }: { session: Session; onExpire
   </div></MessageDelivery>;
 }
 
-function ConversationView({ conversation, title, people, user, api, onRead, onMenu, onRemoved }: { conversation: Conversation; title: string; people: Person[]; user: Person; api: ApiCall; onRead: (id: string) => void; onMenu: () => void; onRemoved: (id: string) => void }) {
+function ConversationView({ conversation, title, people, user, api, onRead, onMenu, onRemoved }: { conversation: Conversation; title: string; people: Person[]; user: Person; api: ApiCall; onRead: (id: string, through: string) => void; onMenu: () => void; onRemoved: (id: string) => void }) {
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   const [thread, setThread] = useState('');
@@ -230,7 +242,7 @@ function ThreadPanel({ parentId, conversationId, user, api, onClose, onUpdate }:
   const epoch = useRef(0);
   const updateRef = useRef(onUpdate); updateRef.current = onUpdate;
   useEffect(() => {
-    let stopped = false; let timer: number;
+    let stopped = false;
     const view = ++epoch.current;
     const controller = new AbortController();
     async function load() {
@@ -238,11 +250,12 @@ function ThreadPanel({ parentId, conversationId, user, api, onClose, onUpdate }:
       try {
         const result = await api<{ messages: Message[] }>('getThread', { conversationId, parentId }, controller.signal);
         if (!stopped && version === revision.current) { observe(result.messages); setMessages(result.messages); updateRef.current(result.messages); setError(''); }
-      } catch (e) { if (!stopped) setError(errorText(e)); }
-      finally { if (!stopped) { setLoading(false); timer = window.setTimeout(load, 8000); } }
+        return !isCachedRead(result);
+      } catch (e) { if (!stopped) setError(errorText(e)); return false; }
+      finally { if (!stopped) setLoading(false); }
     }
-    void load();
-    return () => { stopped = true; if (epoch.current === view) epoch.current++; controller.abort(); window.clearTimeout(timer); };
+    const stopPolling = startPolling(load, { interval: 2000, hiddenInterval: 15000 });
+    return () => { stopped = true; stopPolling(); if (epoch.current === view) epoch.current++; controller.abort(); };
   }, [api, parentId, conversationId, refresh, observe]);
   function update(message: Message) { revision.current++; observe([message]); setMessages(old => mergeMessages(old, [message])); updateRef.current([message]); }
   async function send(body: string, clientId: string) {

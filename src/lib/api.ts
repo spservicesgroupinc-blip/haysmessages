@@ -5,6 +5,8 @@ import { ApiError, fetchWorkspace } from './apiTransport';
 export { ApiError } from './apiTransport';
 
 const KEY='hays.messages.session.v1';
+const cachedData=new WeakSet<object>();
+export const isCachedRead=(data:unknown)=>data!==null&&typeof data==='object'&&cachedData.has(data);
 export const backendUrl=resolveBackendUrl(import.meta.env.VITE_APPS_SCRIPT_URL as string|undefined);
 export const configured=deploymentUrl.test(backendUrl);
 export function loadSession():Session|null {
@@ -33,7 +35,7 @@ export async function request<T>(action:string,payload:Record<string,unknown>={}
   async function cached():Promise<T|null> {
     if(!account||!offlineReadAction(action))return null;
     const value=await savedRead<T>(account,action,payload);
-    if(value!==null)window.dispatchEvent(new CustomEvent('hays:cached-read'));
+    if(value!==null){if(typeof value==='object')cachedData.add(value as object);window.dispatchEvent(new CustomEvent('hays:cached-read'));}
     return value;
   }
   if(!navigator.onLine){
