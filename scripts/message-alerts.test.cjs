@@ -5,6 +5,19 @@ const time = minute => `2026-10-06T12:${String(minute).padStart(2, '0')}:00.000Z
 const conversation = (lastActivity, unread) => ({ id: 'general', lastActivity, unread });
 const message = (id, minute, extra = {}) => ({ id, authorEmail: 'teammate@hays.test', createdAt: time(minute), deleted: false, ...extra });
 
+test('alerts identify the conversation and newest incoming message for an on-screen pop-up', async () => {
+  const { createMessageAlerts } = await loaded;
+  const notices = [];
+  const alerts = createMessageAlerts('me@hays.test', notice => notices.push(notice));
+  alerts.bootstrap([conversation(time(1), 0)]);
+  alerts.messages('general', [message('latest', 2, { body: 'Ready for handoff', parentId: 'parent' })], 'main');
+  assert.equal(notices[0].conversationId, 'general');
+  assert.equal(notices[0].message.id, 'latest');
+  alerts.bootstrap([conversation(time(3), 2)]);
+  assert.equal(notices[1].conversationId, 'general');
+  assert.equal(notices[1].unread, 2);
+});
+
 test('incoming messages chime once, while history, own sends, edits and removed messages stay quiet', async () => {
   const { createMessageAlerts } = await loaded;
   let sounds = 0;
