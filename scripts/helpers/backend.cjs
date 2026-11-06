@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 
 function backend({ channels = true, withoutPushEnqueue = false, salesRows = null } = {}) {
   const properties = new Map();
-  const sheets = new Map();
+  const sheets = new Map(), files = new Map(), folders = new Map();
   class Sheet {
     constructor(name = '') { this.name = name; this.data = []; }
     getName() { return this.name; }
@@ -47,12 +47,34 @@ function backend({ channels = true, withoutPushEnqueue = false, salesRows = null
   if (salesRows) salesSheet.data = salesRows.map(row => [...row]);
   const salesDb = { getSheetByName: name => name === 'Estimator_Sales_Report.xls (6).csv' ? salesSheet : null, getName: () => 'Sales test report', getSpreadsheetTimeZone: () => 'America/Los_Angeles', getUrl: () => 'https://docs.google.com/spreadsheets/d/1Ba1IEJEOb3ILhsZrOZSHCOT5-6pELnwGT-inUcVMcTk/edit' };
   let locked = false;
+  const blob = (bytes, mimeType, name) => ({ getBytes: () => [...bytes], getContentType: () => mimeType, getName: () => name });
+  const drive = {
+    Access: { PRIVATE: 'PRIVATE', ANYONE_WITH_LINK: 'ANYONE_WITH_LINK' }, Permission: { NONE: 'NONE', VIEW: 'VIEW' },
+    createFolder(name) {
+      const id = crypto.randomUUID();
+      const folder = { getId: () => id, setSharing: () => folder, createFile(data) {
+        assert.equal(locked, true, 'picture uploads must be serialized');
+        const id = crypto.randomUUID();
+        const file = { bytes: data.getBytes(), mimeType: data.getContentType(), name: data.getName(), access: 'PRIVATE', trashed: false,
+          getId: () => id, getName: () => file.name, getSize: () => file.bytes.length, getMimeType: () => file.mimeType,
+          getBlob: () => blob(file.bytes, file.mimeType, file.name), getUrl: () => `https://drive.google.com/file/d/${id}/view`,
+          setSharing: access => { file.access = access; return file; }, setTrashed: value => { file.trashed = value; return file; } };
+        files.set(id, file); return file;
+      } };
+      folders.set(id, folder); return folder;
+    },
+    getFolderById(id) { if (!folders.has(id)) throw new Error('Folder unavailable'); return folders.get(id); },
+    getFileById(id) { const file = files.get(id); if (!file || file.trashed) throw new Error('File unavailable'); return file; },
+  };
   const context = vm.createContext({
+    DriveApp: drive,
     PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties.get(key) || null, setProperty: (key, value) => properties.set(key, value) }) },
     SpreadsheetApp: { flush: () => { assert.equal(locked, true); }, create: () => db, openById: id => { if (salesRows && id === '1Ba1IEJEOb3ILhsZrOZSHCOT5-6pELnwGT-inUcVMcTk') return salesDb; assert.equal(id, 'messaging-test-db'); return db; } },
     Utilities: {
       getUuid: () => crypto.randomUUID(), base64Encode: bytes => Buffer.from(bytes).toString('base64'),
-      DigestAlgorithm: { SHA_256: 'sha256' }, computeDigest: (_, value) => crypto.createHash('sha256').update(value).digest(),
+      base64Decode: value => [...Buffer.from(value, 'base64')].map(byte => byte > 127 ? byte - 256 : byte),
+      newBlob: blob,
+      DigestAlgorithm: { SHA_256: 'sha256' }, computeDigest: (_, value) => crypto.createHash('sha256').update(Array.isArray(value) ? Buffer.from(value) : value).digest(),
       computeHmacSha256Signature: (value, salt) => crypto.createHmac('sha256', salt).update(value).digest(),
       formatDate: (value, timezone) => {
         const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(value);
@@ -87,7 +109,7 @@ function backend({ channels = true, withoutPushEnqueue = false, salesRows = null
     context.createUser(email, email.split('@')[0], password, role);
     return ok('login', { email, password });
   }
-  return { context, properties, sheets, salesSheet, call, ok, user };
+  return { context, properties, sheets, salesSheet, files, folders, call, ok, user };
 }
 
 module.exports = { backend };

@@ -9,7 +9,7 @@ import { MessageDelivery, useDelivery } from './components/MessageDelivery';
 import { DeviceControls, PwaStatus } from './components/DeviceControls';
 import { ApiError, backendUrl, isCachedRead, loadSession, request, storeSession } from './lib/api';
 import { clearSavedReads, offlineAccount } from './lib/offline';
-import type { Bootstrap, Conversation, Message, Person, Session } from './lib/types';
+import type { Bootstrap, Conversation, Message, Person, PreparedPicture, Session } from './lib/types';
 import { mergeMessages, useMessages, type ApiCall } from './lib/useMessages';
 import { createMessageAlerts, type IncomingNotice } from './lib/messageAlerts';
 import { startPolling } from './lib/polling';
@@ -258,10 +258,10 @@ function ThreadPanel({ parentId, conversationId, user, api, onClose, onUpdate }:
     return () => { stopped = true; stopPolling(); if (epoch.current === view) epoch.current++; controller.abort(); };
   }, [api, parentId, conversationId, refresh, observe]);
   function update(message: Message) { revision.current++; observe([message]); setMessages(old => mergeMessages(old, [message])); updateRef.current([message]); }
-  async function send(body: string, clientId: string) {
+  async function send(body: string, clientId: string, picture?: PreparedPicture) {
     revision.current++;
     const view = epoch.current;
-    const message = await deliver(conversationId, body, clientId, parentId);
+    const message = await deliver(conversationId, body, clientId, parentId, picture);
     if (view === epoch.current) update(message);
   }
   async function mutate(action: string, message: Message, value?: string) { revision.current++; update(await api<Message>(action, { messageId: message.id, body: value, emoji: value })); }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Message, Person } from './types';
+import type { Message, Person, PreparedPicture } from './types';
 import { useDelivery } from '../components/MessageDelivery';
 import { mergeMessages } from './delivery';
 import { startPolling } from './polling';
@@ -60,10 +60,10 @@ export function useMessages(api: ApiCall, conversationId: string, query: string,
     observe(incoming);
     setMessages(old => visibleNow(mergeMessages(old, incoming)));
   }, [visibleNow, observe]);
-  async function send(body: string, clientId: string) {
+  async function send(body: string, clientId: string, picture?: PreparedPicture) {
     const version = epoch.current;
     revision.current++;
-    const message = await deliver(conversationId, body, clientId);
+    const message = await deliver(conversationId, body, clientId, '', picture);
     if (version === epoch.current) update([message]);
   }
   async function mutate(action: string, message: Message, value?: string) {

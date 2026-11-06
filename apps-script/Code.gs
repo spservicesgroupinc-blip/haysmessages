@@ -1,5 +1,5 @@
 /**
- * Hays + Sons Team Messaging - Enterprise Suite (Version 8.3 - Chat Space Management)
+ * Hays + Sons Team Messaging - Enterprise Suite (Version 8.4 - Private Picture Messages)
  * 
  * SETUP INSTRUCTIONS:
  * 1. Deploy in an Apps Script project.
@@ -24,10 +24,10 @@ var PUSH_SCHEMA = {
 var PASSWORD_ITERATIONS = 1500;
 
 // Serialize shared spreadsheet writes, including monotonic read receipts.
-// Drive uploads and cache-only heartbeats do not need the spreadsheet lock.
+// Picture uploads share this lock for duplicate protection; cache-only heartbeats do not.
 var MUTATIONS = [
   'login','register','logout','changePassword','updateProfile',
-  'createConversation','deleteConversation','leaveConversation','sendMessage','editMessage',
+  'createConversation','deleteConversation','leaveConversation','sendMessage','editMessage','uploadAttachment',
   'deleteMessage','react','markRead','subscribePush','unsubscribePush'
 ];
 
@@ -615,13 +615,15 @@ function getThread_(payload, user) {
 
 function sendMessage_(payload, user) {
   requireConversation_(payload.conversationId, user);
-  var body = payload.attachment ? String(payload.body || '').slice(0, 4000) : text_(payload.body, 4000, 'Message');
+  if (payload.attachment) fail_('bad_request', 'Use an uploaded picture identifier, not attachment metadata.');
+  var picture = payload.attachmentId ? requirePicture_(payload.attachmentId, payload, user) : null;
+  var body = picture ? pictureCaption_(payload.body) : text_(payload.body, 4000, 'Message');
   var clientId = text_(payload.clientId, 100, 'Client Identifier');
   
   var messages = rows_(sheet_('Messages'));
   var existing = messages.find(function(r) { return r[2] === user.email && r[10] === clientId; });
   if (existing) {
-    if (existing[1] !== payload.conversationId || String(existing[8]) !== String(payload.parentId || '')) {
+    if (existing[1] !== payload.conversationId || String(existing[8]) !== String(payload.parentId || '') || String((parseJson_(existing[11], null) || {}).id || '') !== String(payload.attachmentId || '')) {
       fail_('duplicate', 'Client ID collision across conversations or threads.');
     }
     return message_(existing);
@@ -632,7 +634,7 @@ function sendMessage_(payload, user) {
     fail_('bad_request', 'Thread parent message is unavailable.');
   }
   
-  var attachmentJson = payload.attachment ? JSON.stringify(payload.attachment) : '';
+  var attachmentJson = picture ? JSON.stringify(picture) : '';
   var now = new Date().toISOString();
   var row = [
     Utilities.getUuid(),
@@ -689,7 +691,7 @@ function mutateMessage_(payload, user) {
       row[9] = '{}';
       row[11] = '';
     } else {
-      row[4] = cell_(text_(payload.body, 4000, 'Message body'));
+      row[4] = cell_(parseJson_(row[11], null) ? pictureCaption_(payload.body) : text_(payload.body, 4000, 'Message body'));
     }
     row[6] = new Date().toISOString();
   }
@@ -722,42 +724,95 @@ function markRead_(payload, user) {
 // 5. ATTACHMENT / FILE UPLOADS
 // ============================================================================
 
+var MAX_PICTURE_BYTES = 2 * 1024 * 1024;
+var PICTURE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+var PICTURE_HEADERS = ['Id','ConversationId','AuthorEmail','ClientId','FileId','Name','MimeType','Size','CreatedAt','ParentId','Digest'];
+
+function pictureCaption_(value) {
+  if (value == null) return '';
+  if (typeof value !== 'string' || value.length > 4000) fail_('bad_request', 'A caption must be at most 4000 characters.');
+  return value.trim();
+}
+
+function picture_(row) {
+  return { id: String(row[0]), name: String(row[5]), mimeType: String(row[6]), size: Number(row[7]) };
+}
+
+function requirePicture_(id, payload, user) {
+  var row = rows_(db_().getSheetByName('Attachments')).find(function(r) { return r[0] === id; });
+  if (!row || row[1] !== payload.conversationId || row[2] !== user.email || row[3] !== payload.clientId || String(row[9] || '') !== String(payload.parentId || '')) {
+    fail_('forbidden', 'This picture does not belong to this message.');
+  }
+  return picture_(row);
+}
+
+function validatePictureBytes_(bytes, mimeType) {
+  if (!bytes.length || bytes.length > MAX_PICTURE_BYTES || PICTURE_TYPES.indexOf(mimeType) < 0) fail_('bad_request', 'Choose a JPG, PNG, WebP or GIF picture up to 2 MB.');
+  var b = bytes.slice(0, 12).map(function(value) { return value & 255; });
+  var text = String.fromCharCode.apply(null, b);
+  var valid = mimeType === 'image/jpeg' ? b[0] === 255 && b[1] === 216 && b[2] === 255 :
+    mimeType === 'image/png' ? [137,80,78,71,13,10,26,10].every(function(value, i) { return b[i] === value; }) :
+    mimeType === 'image/gif' ? /^GIF8[79]a/.test(text) : text.slice(0, 4) === 'RIFF' && text.slice(8, 12) === 'WEBP';
+  if (!valid) fail_('bad_request', 'The picture contents do not match its image type.');
+}
+
 function getUploadsFolder_() {
   var props = PropertiesService.getScriptProperties();
-  var folderId = props.getProperty('UPLOADS_FOLDER_ID');
-  if (folderId) {
-    try { return DriveApp.getFolderById(folderId); } catch(e) {}
-  }
-  var folder = DriveApp.createFolder('Hays + Sons Messaging Attachments');
-  props.setProperty('UPLOADS_FOLDER_ID', folder.getId());
+  var folderId = props.getProperty('PICTURES_FOLDER_ID');
+  if (folderId) return DriveApp.getFolderById(folderId);
+  var folder = DriveApp.createFolder('Hays + Sons Private Message Pictures');
+  folder.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE);
+  props.setProperty('PICTURES_FOLDER_ID', folder.getId());
   return folder;
 }
 
 function uploadAttachment_(payload, user) {
-  var base64 = text_(payload.base64, 15000000, 'Base64 data');
-  var fileName = text_(payload.fileName, 255, 'Filename');
-  var mimeType = text_(payload.mimeType, 100, 'MIME type');
-  
-  // Safely strip standard browser Data URI scheme prefix if present
-  if (base64.indexOf(',') >= 0) {
-    base64 = base64.split(',')[1];
+  requireConversation_(payload.conversationId, user);
+  var clientId = text_(payload.clientId, 100, 'Client identifier');
+  var parentId = typeof payload.parentId === 'string' ? payload.parentId : '';
+  if (parentId && !rows_(sheet_('Messages')).some(function(r) { return r[0] === parentId && r[1] === payload.conversationId && !r[8] && r[7] !== true; })) fail_('bad_request', 'Thread parent message is unavailable.');
+  var mimeType = text_(payload.mimeType, 100, 'Image type').toLowerCase();
+  var fileName = text_(payload.fileName, 160, 'Picture name').replace(/[\\/\x00-\x1f\x7f]/g, '_');
+  var base64 = text_(payload.base64, Math.ceil(MAX_PICTURE_BYTES / 3) * 4, 'Picture data');
+  if ((base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64))) fail_('bad_request', 'The picture data is invalid.');
+  var bytes;
+  try { bytes = Utilities.base64Decode(base64); } catch(e) { fail_('bad_request', 'The picture data is invalid.'); }
+  validatePictureBytes_(bytes, mimeType);
+  var digest = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, bytes));
+  var sheet = db_().getSheetByName('Attachments');
+  var previous = rows_(sheet).find(function(r) { return r[1] === payload.conversationId && r[2] === user.email && r[3] === clientId && String(r[9] || '') === parentId; });
+  if (previous) {
+    if (previous[10] !== digest) fail_('duplicate', 'That message identifier already has a different picture.');
+    return picture_(previous);
   }
-  
-  var decoded = Utilities.base64Decode(base64);
-  var blob = Utilities.newBlob(decoded, mimeType, fileName);
-  var folder = getUploadsFolder_();
-  var file = folder.createFile(blob);
-  
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  
-  return {
-    id: file.getId(),
-    name: file.getName(),
-    size: file.getSize(),
-    mimeType: file.getMimeType(),
-    url: file.getUrl(),
-    downloadUrl: 'https://drive.google.com/uc?export=download&id=' + file.getId()
-  };
+  var file;
+  try {
+    if (!sheet) { sheet = db_().insertSheet('Attachments'); sheet.appendRow(PICTURE_HEADERS); }
+    file = getUploadsFolder_().createFile(Utilities.newBlob(bytes, mimeType, fileName));
+    file.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE);
+    var row = [Utilities.getUuid(), payload.conversationId, user.email, clientId, file.getId(), cell_(fileName), mimeType, bytes.length, new Date().toISOString(), parentId, digest];
+    sheet.appendRow(row); invalidateSheetCache_('Attachments');
+    return picture_(row);
+  } catch(error) {
+    if (file) { try { file.setTrashed(true); } catch(cleanupError) { Logger.log('An unlinked private picture could not be removed.'); } }
+    fail_('upload_failed', 'Could not save the picture in Drive. Please retry or ask your administrator to check Drive authorization.');
+  }
+}
+
+function getAttachment_(payload, user) {
+  var message = rows_(sheet_('Messages')).find(function(r) { return r[0] === payload.messageId && r[7] !== true; });
+  if (!message) fail_('forbidden', 'This picture is no longer available.');
+  requireConversation_(message[1], user);
+  var metadata = parseJson_(message[11], null);
+  var row = metadata && rows_(db_().getSheetByName('Attachments')).find(function(r) { return r[0] === metadata.id && r[1] === message[1] && r[2] === message[2] && r[3] === message[10]; });
+  if (!row) fail_('forbidden', 'This picture is no longer available.');
+  try {
+    var file = DriveApp.getFileById(row[4]);
+    var bytes = file.getBlob().getBytes();
+    validatePictureBytes_(bytes, row[6]);
+    if (bytes.length !== Number(row[7]) || Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, bytes)) !== row[10]) throw new Error('Picture changed');
+    return { name: String(row[5]), mimeType: String(row[6]), size: bytes.length, base64: Utilities.base64Encode(bytes) };
+  } catch(error) { fail_('picture_unavailable', 'The picture could not be loaded. Please retry or ask your administrator to check its Drive file.'); }
 }
 
 // ============================================================================
@@ -1277,7 +1332,9 @@ function handle_(payload) {
     case 'searchMessages': return searchMessages_(payload, user);
     case 'getThread': return getThread_(payload, user);
     case 'sendMessage': return sendMessage_(payload, user);
+    case 'pictureConfig': return { privateStorage: true, maxBytes: MAX_PICTURE_BYTES, mimeTypes: PICTURE_TYPES };
     case 'uploadAttachment': return uploadAttachment_(payload, user);
+    case 'getAttachment': return getAttachment_(payload, user);
     
     case 'editMessage':
     case 'deleteMessage':
@@ -1346,13 +1403,13 @@ function doGet() {
     ok: true,
     data: {
       app: 'Hays + Sons Team Messaging',
-      version: 8.3,
+      version: 8.4,
       configured: !!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),
       usernameType: 'email',
       features: [
         'email-password-auth','open-or-invite-registration','profile-management',
         'sales-dashboard','sales-aggregations','realtime-presence','drive-attachments',
-        'global-search','batch-pruning','web-push-relay','thread-paging','chat-space-management'
+        'global-search','batch-pruning','web-push-relay','thread-paging','chat-space-management','private-pictures'
       ]
     }
   });
