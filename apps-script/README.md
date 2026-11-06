@@ -4,14 +4,40 @@ The login page sends `login` with `email` and `password` to the messaging web-ap
 
 The backend stores salted password hashes in `Users` and hashed session tokens in `Sessions`. Users must be active. Five failed password attempts lock an account for 15 minutes. Successful authentication returns a session valid for 12 hours. All workspace, messaging, and push requests require that session. Anyone can register using their name, any valid email, and a password of at least 10 characters. Registration creates a member account and returns a session immediately; it cannot grant administrator access.
 
+## Current update: version 8.5
+
+Version 8.5 includes **private picture messages** and **sales job comment boards**, along with all previous messaging and dashboard features. Replace the complete `Code.gs` and `appsscript.json` in the existing messaging project, preserve its Script Properties, run `setupMessaging()` to authorize the declared scopes, and deploy a **New version** of the existing web app. The status response should advertise `private-pictures` and `sales-comments`. Publish the updated frontend too. These repository changes do not publish a Google deployment automatically; actual Drive access and two-account behavior must be checked after publishing.
+
+The manifest adds `https://www.googleapis.com/auth/drive` for private Drive file creation and reads. On the first valid upload, the script creates a private `Hays + Sons Private Message Pictures` folder, saves its ID as `PICTURES_FOLDER_ID`, and creates `Attachments` in the existing messaging database. Keep that property for future deployments. The old upload folder/property is not reused. Do not point it at a shared folder. Google documents the required permission on [Drive folder file creation](https://developers.google.com/apps-script/reference/drive/folder#createFile(BlobSource)).
+
+Picture API actions require a messaging session: `pictureConfig`, `uploadAttachment`, and `getAttachment`. Upload one JPEG/PNG/WebP/GIF up to 2 MB as base64, with a conversation, client ID, and optional root thread ID; the server validates actual bytes and membership and returns an opaque attachment ID. Send that ID with `sendMessage`. Reads use the saved message ID and recheck visibility. Deleted messages, deleted spaces, and former group members cannot retrieve pictures. Image bytes and Drive file IDs are never stored in message bodies or public URLs. Old public attachment links are not migrated. Unlinked uploads and deleted-message files remain private in Drive for owner-managed retention; they are not automatically purged.
+
+Sales comment actions also require a session:
+
+- `salesCommentSummaries`: current source key and 1–25 job numbers; returns each count and latest comment in one call.
+- `listSalesComments`: current source key, job number, optional `beforeId`; returns the latest 50 comments in append order, `hasMore`, and `nextBeforeId`. IDs preserve pagination even when timestamps tie.
+- `addSalesComment`: current source key, job number, body (1–2,000 characters), and stable client ID. Author and time come from the session/server. Retrying identical input returns the saved comment; changing its text/job under the same ID is rejected.
+- `deleteSalesComment`: current source key and comment ID. Only its author or an administrator can remove it; repeated removal succeeds without another write.
+
+`sourceKey` is `JSON.stringify([spreadsheetId, String(sheetId)])` from `salesDashboard.source`. The server derives and verifies it against its configured source; it cannot select an arbitrary sheet. Comments use job numbers, not row positions, and stay in the **messaging spreadsheet**. All signed-in members who can view the sales dashboard can read/post comments. Imported journal notes and source report cells remain read-only. Text is stored as JSON to keep formula-like input inert and rendered as text in the browser. Removal sets `DeletedAt`; retained database rows are not automatically purged.
+
+Optional tabs are created on first use without changing existing account/message rows:
+
+| Tab | Columns |
+| --- | --- |
+| Attachments | Id, ConversationId, AuthorEmail, ClientId, FileId, Name, MimeType, Size, CreatedAt, ParentId, Digest |
+| SalesComments | Id, SourceKey, JobNumberJson, AuthorEmailJson, AuthorNameJson, BodyJson, ClientIdJson, CreatedAt, DeletedAt |
+
+After deployment, sign in with two actual accounts. Send a picture with and without a caption, reload as the recipient, and test a private group/thread. Verify a Drive file remains private, and that leaving/deleting a group removes image access. Post a comment to a sales job, check its list preview on the second account, reload, and retry an interrupted post. The automated tests exercise the actual backend source against isolated Google service doubles; they do not authorize or validate your live Google account.
+
 ## Update the existing deployment
 
 1. Open the **messaging** Apps Script project associated with the configured `VITE_APPS_SCRIPT_URL`. Copy the updated `Code.gs` and `appsscript.json` into it. Preserve any additional project files.
 2. Keep the existing `MESSAGING_SPREADSHEET_ID` Script Property. If connecting an existing messaging Sheet for the first time, set this property to that Sheet's ID.
-3. Run `setupMessaging()` in the editor. It creates missing empty tables and preserves existing accounts and messages. It does not create example people, messages, or channels.
+3. Run `setupMessaging()` in the editor and accept the new Google Drive authorization requested by `appsscript.json`. It creates missing empty tables and preserves existing accounts and messages. It does not create example people, messages, or channels.
 4. Confirm an active account exists in `Users`. Existing accounts work without changing their hashes. For a first administrator, follow the steps below.
 5. Choose **Deploy > Manage deployments**, edit the existing messaging web-app deployment, select **New version**, and deploy. Execute as **Me** with access **Anyone**. Updating the existing deployment keeps the same `/exec` URL. Saving editor code alone does not publish it.
-6. Open the `/exec` URL. It should report version `8.2` and `configured: true`. These are public status fields and do not expose Sheet data or secrets; the signup mode is read separately through the `registrationInfo` action.
+6. Open the `/exec` URL. It should report version `8.5` and `configured: true`. These are public status fields and do not expose Sheet data or secrets; the signup mode is read separately through the `registrationInfo` action.
 7. Publish the updated frontend build. It uses the supplied `/exec` URL even without a frontend environment variable. Open it and choose **Create account** with your name, any valid email, and a password. Create a channel if the Sheet is new. Verify sending and receiving with two actual accounts.
 
 See Google's [web-app deployment guide](https://developers.google.com/apps-script/guides/web) and [versioned deployment guide](https://developers.google.com/apps-script/concepts/deployments#versioned_deployments).

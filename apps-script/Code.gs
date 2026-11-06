@@ -1,5 +1,5 @@
 /**
- * Hays + Sons Team Messaging - Enterprise Suite (Version 8.4 - Private Picture Messages)
+ * Hays + Sons Team Messaging - Enterprise Suite (Version 8.5 - Sales Job Comment Boards)
  * 
  * SETUP INSTRUCTIONS:
  * 1. Deploy in an Apps Script project.
@@ -28,7 +28,7 @@ var PASSWORD_ITERATIONS = 1500;
 var MUTATIONS = [
   'login','register','logout','changePassword','updateProfile',
   'createConversation','deleteConversation','leaveConversation','sendMessage','editMessage','uploadAttachment',
-  'deleteMessage','react','markRead','subscribePush','unsubscribePush'
+  'deleteMessage','react','markRead','subscribePush','unsubscribePush','addSalesComment','deleteSalesComment'
 ];
 
 // ============================================================================
@@ -841,19 +841,24 @@ function getPresence_() {
 // 7. SALES DASHBOARD & REPORTING
 // ============================================================================
 
-function salesDashboard_(payload) {
-  payload = payload || {};
+function salesSource_() {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty('SALES_SPREADSHEET_ID') || '1Ba1IEJEOb3ILhsZrOZSHCOT5-6pELnwGT-inUcVMcTk';
   var tab = props.getProperty('SALES_SHEET_NAME') || 'Estimator_Sales_Report.xls (6).csv';
-  
+
   var db;
   try { db = SpreadsheetApp.openById(id); }
   catch(err) { fail_('sales_access', 'Deployment owner lacks permission to open the sales spreadsheet.'); }
-  
+
   var sheet = db.getSheetByName(tab);
   if (!sheet) fail_('sales_configuration', 'Sales report tab "' + tab + '" was not found.');
-  
+
+  return { id: id, tab: tab, db: db, sheet: sheet };
+}
+
+function salesDashboard_(payload) {
+  payload = payload || {};
+  var source = salesSource_(), id = source.id, tab = source.tab, db = source.db, sheet = source.sheet;
   var count = sheet.getLastRow(), columns = sheet.getLastColumn();
   if (count > 25000) fail_('sales_limit', 'The sales report exceeds 25,000 rows. Narrow the source report.');
   if (!count || !columns) fail_('sales_headers', 'The sales sheet contains no data.');
@@ -971,6 +976,81 @@ function salesDashboard_(payload) {
       skippedRows: skippedRows
     }
   };
+}
+
+// Job comments live in the messaging database; the imported sales sheet is read-only.
+var SALES_COMMENT_HEADERS = ['Id','SourceKey','JobNumberJson','AuthorEmailJson','AuthorNameJson','BodyJson','ClientIdJson','CreatedAt','DeletedAt'];
+
+function salesCommentScope_(numbers, payload) {
+  var source = salesSource_(), sheet = source.sheet;
+  var key = JSON.stringify([source.id, String(sheet.getSheetId())]);
+  if (payload.sourceKey && payload.sourceKey !== key) fail_('sales_source_changed', 'The sales source changed. Refresh the dashboard before commenting.');
+  var count = sheet.getLastRow(), columns = sheet.getLastColumn();
+  if (count > 25000) fail_('sales_limit', 'The sales report exceeds 25,000 rows.');
+  var headers = count && columns ? sheet.getRange(1, 1, 1, Math.min(columns, 60)).getValues()[0] : [];
+  var column = headers.map(function(v) { return String(v || '').trim().toLowerCase(); }).indexOf('job number');
+  if (column < 0) fail_('sales_headers', 'Missing column: Job Number');
+  var jobs = count > 1 ? sheet.getRange(2, column + 1, count - 1, 1).getValues().map(function(r) { return String(r[0] == null ? '' : r[0]).trim().slice(0, 300); }) : [];
+  if (numbers.some(function(number) { return jobs.indexOf(number) < 0; })) fail_('not_found', 'This job is no longer in the sales report. Refresh the dashboard.');
+  return key;
+}
+
+function salesComment_(row) {
+  return { id: String(row[0]), jobNumber: parseJson_(row[2], ''), authorEmail: parseJson_(row[3], ''), authorName: parseJson_(row[4], ''), body: parseJson_(row[5], ''), clientId: parseJson_(row[6], ''), createdAt: String(row[7]) };
+}
+
+function salesCommentRows_(sourceKey, number) {
+  return rows_(db_().getSheetByName('SalesComments')).filter(function(r) { return r[1] === sourceKey && (!number || r[2] === JSON.stringify(number)) && !r[8]; });
+}
+
+function salesCommentSummaries_(payload) {
+  if (!Array.isArray(payload.jobNumbers) || !payload.jobNumbers.length || payload.jobNumbers.length > 25) fail_('bad_request', 'Request between 1 and 25 job numbers.');
+  var numbers = payload.jobNumbers.map(function(n) { return text_(n, 300, 'Job number'); });
+  var key = salesCommentScope_(numbers, payload), summaries = Object.create(null);
+  numbers.forEach(function(n) { summaries[n] = { count: 0, latest: null }; });
+  salesCommentRows_(key).forEach(function(row) {
+    var summary = summaries[parseJson_(row[2], '')];
+    if (summary) { summary.count++; summary.latest = salesComment_(row); }
+  });
+  return { summaries: summaries };
+}
+
+function listSalesComments_(payload) {
+  var number = text_(payload.jobNumber, 300, 'Job number'), key = salesCommentScope_([number], payload);
+  var comments = salesCommentRows_(key, number);
+  if (payload.beforeId) {
+    var cursor = comments.findIndex(function(r) { return r[0] === payload.beforeId; });
+    if (cursor < 0) fail_('bad_request', 'Comment history changed. Reopen this job to refresh.');
+    comments = comments.slice(0, cursor);
+  }
+  var page = comments.slice(-50);
+  return { comments: page.map(salesComment_), hasMore: comments.length > page.length, nextBeforeId: page.length ? page[0][0] : '' };
+}
+
+function addSalesComment_(payload, user) {
+  var number = text_(payload.jobNumber, 300, 'Job number');
+  var body = text_(payload.body, 2000, 'Comment'), clientId = text_(payload.clientId, 100, 'Client identifier');
+  var key = salesCommentScope_([number], payload), sheet = db_().getSheetByName('SalesComments');
+  var existing = rows_(sheet).find(function(r) { return r[1] === key && r[3] === JSON.stringify(user.email) && r[6] === JSON.stringify(clientId); });
+  if (existing) {
+    if (existing[2] !== JSON.stringify(number) || existing[5] !== JSON.stringify(body) || existing[8]) fail_('duplicate', 'That comment identifier has already been used.');
+    return salesComment_(existing);
+  }
+  if (!sheet) { sheet = db_().insertSheet('SalesComments'); sheet.appendRow(SALES_COMMENT_HEADERS); sheet.setFrozenRows(1); }
+  var row = [Utilities.getUuid(), key, JSON.stringify(number), JSON.stringify(user.email), JSON.stringify(user.name), JSON.stringify(body), JSON.stringify(clientId), new Date().toISOString(), ''];
+  sheet.appendRow(row); invalidateSheetCache_('SalesComments');
+  return salesComment_(row);
+}
+
+function deleteSalesComment_(payload, user) {
+  var sheet = db_().getSheetByName('SalesComments'), all = rows_(sheet);
+  var index = all.findIndex(function(r) { return r[0] === payload.commentId; });
+  if (index < 0) fail_('not_found', 'Comment not found.');
+  var row = all[index];
+  if (row[3] !== JSON.stringify(user.email) && user.role !== 'admin') fail_('forbidden', 'Only the author or an administrator can remove this comment.');
+  if (salesCommentScope_([parseJson_(row[2], '')], payload) !== row[1]) fail_('forbidden', 'This comment belongs to another sales source.');
+  if (!row[8]) { row[8] = new Date().toISOString(); sheet.getRange(index + 2, 1, 1, SALES_COMMENT_HEADERS.length).setValues([row]); invalidateSheetCache_('SalesComments'); }
+  return { id: String(row[0]) };
 }
 
 function salesAmount_(value) {
@@ -1324,6 +1404,10 @@ function handle_(payload) {
     case 'heartbeat': return heartbeat_(user);
     case 'getPresence': return getPresence_();
     case 'salesDashboard': return salesDashboard_(payload);
+    case 'salesCommentSummaries': return salesCommentSummaries_(payload);
+    case 'listSalesComments': return listSalesComments_(payload);
+    case 'addSalesComment': return addSalesComment_(payload, user);
+    case 'deleteSalesComment': return deleteSalesComment_(payload, user);
     
     case 'createConversation': return createConversation_(payload, user);
     case 'deleteConversation': return deleteConversation_(payload, user);
@@ -1403,13 +1487,13 @@ function doGet() {
     ok: true,
     data: {
       app: 'Hays + Sons Team Messaging',
-      version: 8.4,
+      version: 8.5,
       configured: !!PropertiesService.getScriptProperties().getProperty('MESSAGING_SPREADSHEET_ID'),
       usernameType: 'email',
       features: [
         'email-password-auth','open-or-invite-registration','profile-management',
         'sales-dashboard','sales-aggregations','realtime-presence','drive-attachments',
-        'global-search','batch-pruning','web-push-relay','thread-paging','chat-space-management','private-pictures'
+        'global-search','batch-pruning','web-push-relay','thread-paging','chat-space-management','private-pictures','sales-comments'
       ]
     }
   });

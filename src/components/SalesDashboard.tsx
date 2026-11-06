@@ -2,6 +2,8 @@
 import { ArrowUpRight, BarChart3, CalendarDays, ChevronDown, CircleDollarSign, ClipboardList, Clock3, ExternalLink, Filter, Loader2, Menu, RefreshCw, Search, Users } from 'lucide-react';
 import { Modal } from './Modal';
 import { ApiError, backendUrl } from '../lib/api';
+import type { Person } from '../lib/types';
+import { SalesCommentBoard, SalesCommentPreview, useSalesCommentSummaries, type CommentSummary } from './SalesComments';
 import type { ApiCall } from '../lib/useMessages';
 import { ageDays, emptySalesFilters, estimatorTotals, filterSales, isPending, plainJournal, receivedTrend, salesDateRange, salesSummary, type SalesFilters, type SalesFocus, type SalesJob, type SalesPeriod, type SalesReport } from '../lib/sales';
 import './sales.css';
@@ -14,7 +16,7 @@ const sourceUrl = (report: SalesReport) => `https://docs.google.com/spreadsheets
 const options = (jobs: SalesJob[], field: 'estimator' | 'division' | 'status') => [...new Set(jobs.map(job => job[field] || (field === 'status' ? 'Not entered' : 'Unassigned')))].sort();
 const pageSize = 25;
 
-export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: () => void }) {
+export default function SalesDashboard({ api, user, onMenu }: { api: ApiCall; user: Person; onMenu: () => void }) {
   const [report, setReport] = useState<SalesReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -24,7 +26,7 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
   const [advanced, setAdvanced] = useState(false);
   const [sort, setSort] = useState('newest');
   const [page, setPage] = useState(0);
-  const [detailId, setDetailId] = useState<string | null>(null);
+  const [detailJobNumber, setDetailJobNumber] = useState<string | null>(null);
 
   useEffect(() => {
     let stopped = false;
@@ -86,7 +88,9 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
   const filtered = Object.values(filters).some(Boolean);
   const currentPage = Math.min(page, Math.max(0, Math.ceil(jobs.length / pageSize) - 1));
   const visible = jobs.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
-  const detail = report?.jobs.find(job => job.id === detailId);
+  const commentSource = report ? JSON.stringify([report.source.spreadsheetId, String(report.source.sheetId)]) : '';
+  const comments = useSalesCommentSummaries(api, commentSource, visible.map(job => job.jobNumber), report?.fetchedAt || '');
+  const detail = report?.jobs.find(job => job.jobNumber === detailJobNumber);
   const focusViews: { value: SalesFocus; label: string; count: number }[] = [
     { value: '', label: 'All jobs', count: scopeTotals.jobs },
     { value: 'missing', label: 'Missing estimates', count: scopeTotals.missing },
@@ -130,8 +134,9 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
           <div className="sales-kpi"><span><Clock3 size={17} /> Pending 30+ days</span><strong>{totals.aged}</strong><small>Pending jobs received 30+ days ago<br />Review for the next follow-up</small></div>
         </div>
         {(report.quality.invalidDates > 0 || report.quality.invalidEstimates > 0 || report.quality.skippedRows > 0) && <p className="notice sales-quality">Source report: {report.quality.invalidDates} dates could not be read; {report.quality.invalidEstimates} amounts could not be read; {report.quality.skippedRows} rows without a job number were skipped. Unreadable values are shown as not entered.</p>}
-        <section className="sales-card sales-jobs"><div className="sales-card-heading"><div><h2>Sales opportunities <span>{jobs.length}</span></h2><p>Scan the latest notes. Open a job for the full update and contact details.</p></div><label className="sales-sort">Sort by<select aria-label="Sort sales jobs" value={sort} onChange={e => { setSort(e.target.value); setPage(0); }}><option value="newest">Newest received</option><option value="oldest">Oldest received</option><option value="estimate">Largest estimate</option></select></label></div>
-          <SalesOpportunityTable jobs={visible} today={today} onOpen={setDetailId} />
+        <section className="sales-card sales-jobs"><div className="sales-card-heading"><div><h2>Sales opportunities <span>{jobs.length}</span></h2><p>Latest customer notes and team updates. Open a job to join the conversation.</p></div><label className="sales-sort">Sort by<select aria-label="Sort sales jobs" value={sort} onChange={e => { setSort(e.target.value); setPage(0); }}><option value="newest">Newest received</option><option value="oldest">Oldest received</option><option value="estimate">Largest estimate</option></select></label></div>
+          <SalesOpportunityTable jobs={visible} today={today} summaries={comments.summaries} onOpen={setDetailJobNumber} />
+          {comments.error && <p className="notice sales-comments-error" role="status">{comments.error} <button type="button" className="text-button" onClick={comments.changed}>Retry comments</button></p>}
           {!jobs.length && <div className="sales-table-empty"><p>{report.jobs.length ? 'No jobs match these filters.' : 'The source report has no jobs yet.'}</p>{filtered && <button className="text-button" onClick={clearFilters}>Reset view</button>}</div>}
           <div className="sales-table-footer"><span>{jobs.length ? `${currentPage * pageSize + 1}–${Math.min((currentPage + 1) * pageSize, jobs.length)} of ${jobs.length} jobs` : '0 jobs'}{filtered ? ' · Filtered view' : ''}</span><div><button className="button compact" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button className="button compact" disabled={(currentPage + 1) * pageSize >= jobs.length} onClick={() => setPage(currentPage + 1)}>Next</button></div></div>
         </section>
@@ -150,28 +155,29 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
         <p className="sales-footnote">Source: {report.source.sheetName}. All metrics follow your filters. Dates use the sheet’s time zone ({report.source.timezone}). Refresh after changes in Google Sheets.</p>
       </>}
     </div>
-    {detail && report && <Modal title={detail.jobNumber} onClose={() => setDetailId(null)}>
+    {detail && report && <Modal title={detail.jobNumber} onClose={() => setDetailJobNumber(null)}>
       <p className="sales-detail-customer">{detail.customer || 'Customer not entered'}</p><span className="sales-status">{detail.status || 'Not entered'}</span>
       <h3 className="members-heading">Latest journal note</h3><p className="sales-journal">{plainJournal(detail.journalNote) || 'No journal note entered.'}</p>
+      <SalesCommentBoard key={`${commentSource}:${detail.jobNumber}`} api={api} sourceKey={commentSource} jobNumber={detail.jobNumber} user={user} onChanged={comments.changed} />
       <dl className="sales-details">{[
         ['Estimate', detail.estimate === null ? 'Not entered' : money(detail.estimate)], ['Estimator', detail.estimator], ['Division', detail.division], ['Received', date(detail.receivedDate)], ['Inspected', date(detail.inspectedDate)], ['Insurance carrier', detail.insuranceCarrier], ['Primary adjuster', detail.primaryAdjuster], ['Referred by', detail.referredBy], ['Foreman', detail.foreman], ['Marketing person', detail.marketingPerson], ['Reason for closing', detail.closingReason],
       ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || 'Not entered'}</dd></div>)}</dl>
-      <div className="modal-actions"><a className="button" href={`${sourceUrl(report)}&range=A${detail.sourceRow}:O${detail.sourceRow}`} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open in Google Sheets</a><button className="button primary" onClick={() => setDetailId(null)}>Done</button></div>
+      <div className="modal-actions"><a className="button" href={`${sourceUrl(report)}&range=A${detail.sourceRow}:O${detail.sourceRow}`} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open in Google Sheets</a><button className="button primary" onClick={() => setDetailJobNumber(null)}>Done</button></div>
     </Modal>}
   </section>;
 }
 
-function SalesOpportunityTable({ jobs, today, onOpen }: { jobs: SalesJob[]; today: string; onOpen: (id: string) => void }) {
+function SalesOpportunityTable({ jobs, today, summaries, onOpen }: { jobs: SalesJob[]; today: string; summaries: Record<string, CommentSummary>; onOpen: (id: string) => void }) {
   return <div className="sales-table-scroll" role="region" aria-label="Sales opportunities table" tabIndex={0}>
     <table className="sales-table sales-notes-table" aria-label="Sales opportunities">
-      <thead><tr><th scope="col">Job / Customer</th><th scope="col">Estimator / Status</th><th scope="col">Latest note</th><th scope="col">Estimate / Received</th></tr></thead>
+      <thead><tr><th scope="col">Job / Customer</th><th scope="col">Estimator / Status</th><th scope="col">Notes / Team updates</th><th scope="col">Estimate / Received</th></tr></thead>
       <tbody>{jobs.map(job => {
         const note = plainJournal(job.journalNote || '');
         const age = ageDays(job, today);
         return <tr key={job.id}>
-          <td className="sales-job-cell"><button className="sales-job-link" onClick={() => onOpen(job.id)}>{job.jobNumber}<ArrowUpRight size={13} /></button><span className="sales-customer">{job.customer || 'Customer not entered'}</span></td>
+          <td className="sales-job-cell"><button className="sales-job-link" onClick={() => onOpen(job.jobNumber)}>{job.jobNumber}<ArrowUpRight size={13} /></button><span className="sales-customer">{job.customer || 'Customer not entered'}</span></td>
           <td className="sales-owner-cell" data-label="Estimator / Status"><strong>{job.estimator || 'Unassigned'}</strong><small>{job.division || 'Division not entered'}</small><span className="sales-status">{job.status || 'Not entered'}</span></td>
-          <td className="sales-note-cell" data-label="Latest note">{note ? <><p className="sales-note-preview">{note}</p><button className="text-button" aria-label={`Read note for ${job.jobNumber}`} onClick={() => onOpen(job.id)}>Read full note<ArrowUpRight size={12} /></button></> : <p className="sales-note-empty">No note entered</p>}</td>
+          <td className="sales-note-cell" data-label="Notes / Team updates">{note ? <><p className="sales-note-preview">{note}</p><button className="text-button" aria-label={`Read note for ${job.jobNumber}`} onClick={() => onOpen(job.jobNumber)}>Read full note<ArrowUpRight size={12} /></button></> : <p className="sales-note-empty">No note entered</p>}<SalesCommentPreview jobNumber={job.jobNumber} summary={summaries[job.jobNumber]} onOpen={()=>onOpen(job.jobNumber)} /></td>
           <td className="sales-estimate-cell" data-label="Estimate / Received"><strong className={job.estimate === null ? 'sales-missing' : ''}>{job.estimate === null ? 'Not entered' : money(job.estimate)}</strong><small>{date(job.receivedDate)}</small><small className={isPending(job) && age !== null && age >= 30 ? 'sales-old' : ''}>{age === null ? 'Age unavailable' : age < 0 ? 'Future date' : `${age} ${age === 1 ? 'day' : 'days'} since received`}</small></td>
         </tr>;
       })}</tbody>

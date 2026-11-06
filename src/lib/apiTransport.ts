@@ -19,7 +19,7 @@ interface Envelope<T> { ok: boolean; data?: T; error?: string; code?: string }
 // does not establish whether it committed (reactions, for example, toggle).
 const READ_ACTIONS = new Set([
   'registrationInfo', 'session', 'bootstrap', 'listMessages', 'searchMessages',
-  'getThread', 'getPresence', 'salesDashboard', 'pushConfig', 'pushStatus', 'pictureConfig', 'getAttachment',
+  'getThread', 'getPresence', 'salesDashboard', 'pushConfig', 'pushStatus', 'pictureConfig', 'getAttachment', 'salesCommentSummaries', 'listSalesComments',
 ]);
 const TEMPORARY_ERRORS = new Set(['backend_unavailable', 'backend_throttled', 'bad_response']);
 
