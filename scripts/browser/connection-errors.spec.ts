@@ -40,7 +40,9 @@ test('workspace and messages recover from temporary Google HTML responses', asyn
   await expect(page.getByRole('textbox', { name: 'Message #general' })).toBeVisible();
   await expect(page.getByText('Start the conversation', { exact: true })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
-  expect(attempts.bootstrap).toBe(2); expect(attempts.listMessages).toBe(2);
+  // Normal foreground polls may follow the successful recovery before this assertion.
+  // api-transport.test.cjs separately verifies the one-retry limit per read.
+  expect(attempts.bootstrap).toBeGreaterThanOrEqual(2); expect(attempts.listMessages).toBeGreaterThanOrEqual(2);
 });
 
 test('HTML after saving a message retains the draft and manual retry returns the same saved message', async ({ page }) => {

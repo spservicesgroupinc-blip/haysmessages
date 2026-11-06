@@ -26,6 +26,7 @@ export function Composer({label,onSend,draftKey}:{label:string;draftKey:string;o
   const [body,setBody]=useState(()=>{const draft=readDraft(draftKey);return outgoing.some(m=>m.clientId===draft?.id&&m.pending==='sending')?'':draft?.body||'';});
   const [sending,setSending]=useState(0);
   const [error,setError]=useState('');
+  const [recoverable,setRecoverable]=useState(false);
   const retry=useRef<{body:string;id:string}|null>(readDraft(draftKey));
   function persist(text:string,id:string) {try{if(text||id)sessionStorage.setItem(`hays.draft:${draftKey}`,JSON.stringify({body:text,id}));else sessionStorage.removeItem(`hays.draft:${draftKey}`);}catch{/* Keep the in-memory draft when storage is unavailable. */}}
   useEffect(()=>{
@@ -35,7 +36,7 @@ export function Composer({label,onSend,draftKey}:{label:string;draftKey:string;o
       if(key!==draftKey)return;
       if(readDraft(draftKey)?.id===message.clientId)persist('','');
       if(retry.current?.id===message.clientId){
-        retry.current=null;setError('');setBody(current=>current.trim()===message.body?'':current);selectPicture();
+        retry.current=null;setError('');setRecoverable(false);setBody(current=>current.trim()===message.body?'':current);selectPicture();
       }
     };
     window.addEventListener('hays:message-delivered',delivered);
@@ -47,7 +48,7 @@ export function Composer({label,onSend,draftKey}:{label:string;draftKey:string;o
     const messageId=retry.current?.body===text ? retry.current.id : crypto.randomUUID();retry.current=null;
     // Clear the input and show the message immediately; the draft stays saved
     // until the backend confirms so a failure can always be retried in place.
-    setBody('');selectPicture();setError('');setSending(count=>count+1);persist(text,messageId);
+    setBody('');selectPicture();setError('');setRecoverable(false);setSending(count=>count+1);persist(text,messageId);
     try{
       await onSend(text,messageId,selected);
       if(readDraft(draftKey)?.id===messageId)persist('','');
@@ -56,12 +57,12 @@ export function Composer({label,onSend,draftKey}:{label:string;draftKey:string;o
       if(!pictureRef.current&&selected)selectPicture(selected);
       setBody(current=>current.trim()?current:text);
       if(!readDraft(draftKey))persist(text,messageId);
-      setError(e instanceof Error?e.message:'Could not send.');
+      setError(e instanceof Error?e.message:'Could not send.');setRecoverable(true);
     }finally{setSending(count=>count-1);}
   }
   async function choosePicture(file?:File){
     if(!file)return;
-    setPreparing(true);setError('');retry.current=null;
+    setPreparing(true);setError('');setRecoverable(false);retry.current=null;
     try{selectPicture(await preparePicture(file));}catch(e){setError(e instanceof Error?e.message:'Could not prepare picture.');}finally{setPreparing(false);}
   }
   return <form className="composer" onSubmit={send}>
@@ -70,7 +71,7 @@ export function Composer({label,onSend,draftKey}:{label:string;draftKey:string;o
     <label className="sr-only" htmlFor={inputId}>{label}</label>
     <textarea id={inputId} aria-label={label} placeholder={label} value={body} onChange={e=>{setBody(e.target.value);persist(e.target.value,retry.current?.body===e.target.value.trim()?retry.current.id:'');}} rows={2} maxLength={4000} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing && window.matchMedia('(pointer:fine)').matches){event.preventDefault();void send();}}}/>
     <div className="composer-bottom"><button type="button" className="icon-button attach-picture" aria-label="Attach picture" disabled={preparing} onClick={()=>fileInput.current?.click()}>{preparing?<Loader2 className="spin" size={19}/>:<ImagePlus size={19}/>}</button><span>{sending&&!body.trim()?'Sending…':<><span className="desktop-hint">Enter to send · Shift + Enter for a new line</span><span className="mobile-hint">Keep the team in the loop</span></>}</span><button className="send-button" type="submit" disabled={preparing||(!body.trim()&&!picture)} aria-label="Send message">{sending&&!body.trim()?<Loader2 className="spin" size={17}/>:<Send size={17}/>}</button></div>
-    {error && <p className="error" role="alert">{error}</p>}
+    {error && <p className="error" role="alert">{error}{recoverable&&' Your message is still here; you can retry.'}</p>}
   </form>;
 }
 

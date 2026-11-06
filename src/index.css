@@ -34,15 +34,15 @@
 .message-toast p{font-size:13px;line-height:1.6;overflow-wrap:anywhere;margin:8px 0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;white-space:pre-wrap}.message-toast .text-button{color:#a82b2b;padding-left:0;min-height:32px}.message-toast>.icon-button{color:var(--muted);width:30px;height:30px}
 @media(max-width:700px){.message-toasts{right:10px;top:calc(10px + env(safe-area-inset-top));max-width:calc(100vw - 20px)}.message-toast .text-button,.message-toast>.icon-button{min-height:40px}}
 /* Pictures stay inside the conversation; the full-size view opens on request. */
-.composer-picture{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);min-width:0}
+.composer-picture{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);min-width:0}
 .composer-picture img{width:64px;height:56px;object-fit:cover;border-radius:7px}
 .composer-picture>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:13px}
 .composer-picture small{display:block;color:var(--muted);font-size:11px;margin-top:3px}
 .composer-bottom>span{flex:1;min-width:0}
 .attach-picture{flex-shrink:0}
 .message-picture{margin:8px 0;max-width:360px}
-.picture-open{display:block;max-width:100%;padding:0;border:1px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden;cursor:zoom-in}
+.picture-open{display:block;max-width:100%;padding:0;border:1px solid var(--line);border-radius:10px;background:#f8fafc;overflow:hidden;cursor:zoom-in}
 .picture-open img{display:block;max-width:100%;max-height:300px;min-width:90px;min-height:60px;object-fit:contain}
-.picture-placeholder{display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;min-height:130px;padding:16px;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:12px;text-align:center}
+.picture-placeholder{display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;min-height:130px;padding:16px;border:1px solid var(--line);border-radius:10px;color:var(--muted);font-size:12px;text-align:center}
 .picture-full{display:block;width:100%;max-height:65dvh;object-fit:contain;border-radius:8px}
 @media(max-width:600px){.picture-open img{max-height:240px}.message-picture{max-width:100%}.composer-bottom{gap:6px}.composer-picture small{font-size:10px}}

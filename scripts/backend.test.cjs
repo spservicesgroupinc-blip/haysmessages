@@ -50,7 +50,7 @@ test('password resets are editor-only, retain accounts and revoke every session 
 test('public status reports the configured signup mode and disabled closes signup', () => {
   const b = backend();
   const status = JSON.parse(b.context.doGet()).data;
-  assert.equal(status.version, 8.4);
+  assert.equal(status.version, 8.5);
   assert.ok(status.features.includes('private-pictures'));
   assert.ok(status.features.includes('chat-space-management')); assert.equal(status.configured, true); assert.equal(status.usernameType, 'email');
   assert.ok(status.features.includes('sales-aggregations'));

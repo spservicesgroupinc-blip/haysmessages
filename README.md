@@ -2,6 +2,22 @@
 
 React, TypeScript and Vite workspace for channels, direct and group messages, search, threads, reactions, unread counts, and message editing/deletion. The backend is a separate Google Apps Script project with its own Google spreadsheet. Any valid email address can be used as a username; Apps Script checks the password against the `Users` sheet and issues a 12-hour session. Anyone can create an account with their name, email, and password and enter the shared company workspace immediately. Passwords are never stored in the frontend.
 
+## Sales job comment boards (backend 8.5)
+
+Each opportunity keeps its imported journal note and shows the latest **team comment**, author, time, and comment count below it. Choose **Add team comment** or **View board** to open the job. The board shows newest comments first, accepts updates up to 2,000 characters, and preserves an unfinished text draft when the job closes or the page reloads. Comments are shared with signed-in workspace members. Authors and administrators can remove comments after an inline confirmation.
+
+The list refreshes comments every 10 seconds and an open board every 5 seconds while visible, with slower/background/offline polling and retry backoff. **Refresh team comments** reloads the board. History loads 50 comments at a time; loading earlier history pauses automatic board replacement until refresh so the reading position is preserved. The opportunity list continues refreshing. Comments are separate from the imported journal and do not change the source sales spreadsheet or dashboard calculations.
+
+The backend validates the job against the configured source and stores comments in a new `SalesComments` tab in the **messaging** database. Identity uses the source spreadsheet, source tab ID, and job number, so sorting or replacing report rows does not detach comments. Job numbers must remain stable and identify one logical job; changing a job number creates a separate board. Removed jobs cannot receive new comments. A changed source requires a dashboard refresh. Old deployments explain the required update while keeping the sales report available.
+
+## Picture messages (backend 8.4 or later)
+
+Use **Attach picture** in a chat or thread, choose a JPG, PNG, WebP, or GIF, optionally add a caption, and send. Pictures appear immediately during upload and remain visible while switching conversations. Failed sends offer a retry that reuses the original message and upload identifiers. Open a picture to view or save it. Non-GIF pictures are resized to a maximum 2,048-pixel edge before upload; input files are limited to 15 MB and the prepared image to 2 MB. Animated GIFs must already fit within 2 MB. Export HEIC images as JPG or PNG first.
+
+Apps Script stores pictures in a new private Drive folder and exposes image bytes only to an authenticated member who can read the associated, nondeleted message. The client never receives a public Drive link. Uploads validate the image signature, type, size, conversation, author, and thread. Picture drafts and pending bytes stay in memory for the current signed-in workspace; navigating chats preserves them, but closing/reloading the app requires selecting an unsent picture again. Offline storage saves message metadata, not picture bytes. Existing files created by an older public upload handler are not automatically migrated or made private.
+
+Publish the complete `apps-script/Code.gs` and `apps-script/appsscript.json`, authorize the added Google Drive permission, and publish a **new version of the existing Apps Script deployment**. Version 8.5 includes both picture sending and sales comment boards. The frontend checks private-picture capability before uploading and blocks the older public upload path. See [Apps Script rollout](apps-script/README.md).
+
 ## Run locally
 
 ```powershell
