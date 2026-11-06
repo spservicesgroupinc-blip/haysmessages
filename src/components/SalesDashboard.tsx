@@ -3,7 +3,7 @@ import { ArrowUpRight, BarChart3, CalendarDays, ChevronDown, CircleDollarSign, C
 import { Modal } from './Modal';
 import { ApiError, backendUrl } from '../lib/api';
 import type { ApiCall } from '../lib/useMessages';
-import { ageDays, emptySalesFilters, estimatorTotals, filterSales, plainJournal, receivedTrend, salesDateRange, salesSummary, type SalesFilters, type SalesFocus, type SalesJob, type SalesPeriod, type SalesReport } from '../lib/sales';
+import { ageDays, emptySalesFilters, estimatorTotals, filterSales, isPending, plainJournal, receivedTrend, salesDateRange, salesSummary, type SalesFilters, type SalesFocus, type SalesJob, type SalesPeriod, type SalesReport } from '../lib/sales';
 import './sales.css';
 
 const currencyFormat = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -64,7 +64,10 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
     trend: receivedTrend(jobs, today),
   }), [jobs, today]);
   // Quick-view counts retain the other filters, so switching focus remains predictable.
-  const scopeTotals = useMemo(() => salesSummary(filterSales(report?.jobs || [], { ...filters, focus: '' }, today), today), [report, filters, today]);
+  const scopeTotals = useMemo(() => {
+    const scope = filterSales(report?.jobs || [], { ...filters, focus: '' }, today);
+    return { ...salesSummary(scope, today), noNotes: scope.filter(job => isPending(job) && !plainJournal(job.journalNote || '')).length };
+  }, [report, filters, today]);
   const filterOptions = useMemo(() => ({
     estimator: options(report?.jobs || [], 'estimator'),
     division: options(report?.jobs || [], 'division'),
@@ -89,12 +92,13 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
     { value: 'missing', label: 'Missing estimates', count: scopeTotals.missing },
     { value: 'aged', label: 'Pending 30+ days', count: scopeTotals.aged },
     { value: 'unassigned', label: 'Unassigned', count: scopeTotals.unassigned },
+    { value: 'no-notes', label: 'Pending without notes', count: scopeTotals.noNotes },
   ];
 
   return <section className="sales-page" aria-label="Sales dashboard">
     <header className="sales-header">
       <button className="icon-button mobile-only" aria-label="Open navigation" onClick={onMenu}><Menu size={21} /></button>
-      <div><span className="sales-eyebrow">HAYS + SONS / SALES</span><h1>Sales dashboard</h1><p>Your pipeline at a glance. See what needs to move next.</p></div>
+      <div><span className="sales-eyebrow">HAYS + SONS / SALES</span><h1>Sales dashboard</h1><p>Customer updates and the next follow-up, in one view.</p></div>
       <button className="button compact" disabled={loading} onClick={() => setRefresh(n => n + 1)}>{loading ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />} Refresh</button>
     </header>
     <div className="sales-body" aria-busy={loading}>
@@ -103,7 +107,7 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
       {report && <div className="sales-source"><span role="status"><span className={`sales-source-dot ${error ? 'stale' : ''}`} />{loading ? 'Refreshing report…' : error ? 'Showing last loaded report' : 'Connected to Google Sheets'}<span className="sales-updated" title={new Date(report.fetchedAt).toLocaleString('en-US', { timeZone: 'America/Indianapolis' })}> · Loaded {new Date(report.fetchedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Indianapolis' })} ET</span></span><a href={sourceUrl(report)} target="_blank" rel="noreferrer">Open source sheet <ExternalLink size={13} /></a></div>}
       {loading && !report ? <div className="sales-empty" role="status"><Loader2 size={28} className="spin" /><h2>Loading your sales report</h2><p>Reading the latest jobs from your connected sheet.</p></div> : !report ? <div className="sales-empty"><BarChart3 size={36} /><h2>Connect your sales report</h2><p>The dashboard uses your existing sign-in and the supplied sales spreadsheet.</p><a className="button" href="https://docs.google.com/spreadsheets/d/1Ba1IEJEOb3ILhsZrOZSHCOT5-6pELnwGT-inUcVMcTk/edit" target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open sales sheet</a></div> : <>
         <div className="sales-filters" aria-label="Sales filters">
-          <label className="sales-search"><span className="sr-only">Search sales jobs</span><Search size={17} /><input aria-label="Search sales jobs" placeholder="Search job, customer, or carrier" value={filters.search} onChange={e => change('search', e.target.value)} /></label>
+          <label className="sales-search"><span className="sr-only">Search sales jobs</span><Search size={17} /><input aria-label="Search sales jobs" placeholder="Search jobs, customers, or notes" value={filters.search} onChange={e => change('search', e.target.value)} /></label>
           <label>Estimator<select aria-label="Estimator" value={filters.estimator} onChange={e => change('estimator', e.target.value)}><option value="">All estimators</option>{filterOptions.estimator.map(value => <option key={value}>{value}</option>)}</select></label>
           <label>Received<select aria-label="Received range" value={period} onChange={e => { const range = salesDateRange(e.target.value as SalesPeriod, today); setRange(range.from, range.to); }}><option value="all">All time</option><option value="month">This month</option><option value="30days">Last 30 days</option><option value="custom" disabled>Custom dates</option></select></label>
           <button className={`button compact sales-filter-toggle ${extraFilterCount ? 'has-filters' : ''}`} aria-expanded={advanced} aria-controls="sales-extra-filters" onClick={() => setAdvanced(value => !value)}><Filter size={14} /> More filters{extraFilterCount > 0 && <span>{extraFilterCount}</span>}<ChevronDown size={14} className={advanced ? 'rotated' : ''} /></button>
@@ -126,7 +130,13 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
           <div className="sales-kpi"><span><Clock3 size={17} /> Pending 30+ days</span><strong>{totals.aged}</strong><small>Pending jobs received 30+ days ago<br />Review for the next follow-up</small></div>
         </div>
         {(report.quality.invalidDates > 0 || report.quality.invalidEstimates > 0 || report.quality.skippedRows > 0) && <p className="notice sales-quality">Source report: {report.quality.invalidDates} dates could not be read; {report.quality.invalidEstimates} amounts could not be read; {report.quality.skippedRows} rows without a job number were skipped. Unreadable values are shown as not entered.</p>}
-        <div className="sales-charts">
+        <section className="sales-card sales-jobs"><div className="sales-card-heading"><div><h2>Sales opportunities <span>{jobs.length}</span></h2><p>Scan the latest notes. Open a job for the full update and contact details.</p></div><label className="sales-sort">Sort by<select aria-label="Sort sales jobs" value={sort} onChange={e => { setSort(e.target.value); setPage(0); }}><option value="newest">Newest received</option><option value="oldest">Oldest received</option><option value="estimate">Largest estimate</option></select></label></div>
+          <SalesOpportunityTable jobs={visible} today={today} onOpen={setDetailId} />
+          {!jobs.length && <div className="sales-table-empty"><p>{report.jobs.length ? 'No jobs match these filters.' : 'The source report has no jobs yet.'}</p>{filtered && <button className="text-button" onClick={clearFilters}>Reset view</button>}</div>}
+          <div className="sales-table-footer"><span>{jobs.length ? `${currentPage * pageSize + 1}–${Math.min((currentPage + 1) * pageSize, jobs.length)} of ${jobs.length} jobs` : '0 jobs'}{filtered ? ' · Filtered view' : ''}</span><div><button className="button compact" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button className="button compact" disabled={(currentPage + 1) * pageSize >= jobs.length} onClick={() => setPage(currentPage + 1)}>Next</button></div></div>
+        </section>
+        <details className="sales-analysis"><summary><BarChart3 size={16} /><span>Estimator &amp; received trends</span><ChevronDown size={16} /></summary>
+          <div className="sales-charts">
           <section className="sales-card"><div className="sales-card-heading"><div><h2>Estimator overview</h2><p>Entered estimates and follow-up workload · select to filter</p></div><Users size={18} /></div>
             {estimators.length ? <ul className="sales-bars">{estimators.map(group => <li key={group.name}><button className="sales-estimator" aria-label={`Filter estimator: ${group.name}`} aria-pressed={filters.estimator === group.name} onClick={() => change('estimator', filters.estimator === group.name ? '' : group.name)}><span className="sales-estimator-heading"><strong>{group.name}</strong><span>{money(group.value)}</span></span><span className="sales-track"><span style={{ width: `${Math.max(0, group.value) / maxValue * 100}%` }} /></span><small>{group.count} jobs · {group.count - group.priced} missing estimates{group.aged > 0 ? ` · ${group.aged} pending 30+ days` : ''}</small></button></li>)}</ul> : <p className="sales-chart-empty">No jobs match your filters.</p>}
           </section>
@@ -136,25 +146,35 @@ export default function SalesDashboard({ api, onMenu }: { api: ApiCall; onMenu: 
             <p className="sales-chart-note">Current month through {date(today)}. Counts use received dates from this snapshot{receivedCount === 0 ? '; none fall in these months' : ''}.</p>
           </section>
         </div>
-        <section className="sales-card sales-jobs"><div className="sales-card-heading"><div><h2>Sales opportunities <span>{jobs.length}</span></h2><p>Select a job for its latest note, contacts, and source row.</p></div><label className="sales-sort">Sort by<select aria-label="Sort sales jobs" value={sort} onChange={e => { setSort(e.target.value); setPage(0); }}><option value="newest">Newest received</option><option value="oldest">Oldest received</option><option value="estimate">Largest estimate</option></select></label></div>
-          <div className="sales-table-scroll" role="region" aria-label="Sales opportunities table" tabIndex={0}><table className="sales-table"><thead><tr><th scope="col">Job / Customer</th><th scope="col">Estimator</th><th scope="col">Division</th><th scope="col">Status</th><th scope="col" className="sales-number">Estimate</th><th scope="col">Received / Age</th></tr></thead><tbody>{visible.map(job => {
-            const age = ageDays(job, today);
-            return <tr key={job.id}><td><button className="sales-job-link" onClick={() => setDetailId(job.id)}>{job.jobNumber}<ArrowUpRight size={13} /></button><span className="sales-customer">{job.customer || 'Customer not entered'}</span></td><td>{job.estimator || 'Unassigned'}</td><td>{job.division || 'Unassigned'}</td><td><span className="sales-status">{job.status || 'Not entered'}</span></td><td className={`sales-number ${job.estimate === null ? 'sales-missing' : ''}`}>{job.estimate === null ? 'Not entered' : money(job.estimate)}</td><td>{date(job.receivedDate)}<small className={age !== null && age >= 30 ? 'sales-old' : ''}>{age === null ? 'Age unavailable' : age < 0 ? 'Future date' : `${age} ${age === 1 ? 'day' : 'days'} ago`}</small></td></tr>;
-          })}</tbody></table></div>
-          {!jobs.length && <div className="sales-table-empty"><p>{report.jobs.length ? 'No jobs match these filters.' : 'The source report has no jobs yet.'}</p>{filtered && <button className="text-button" onClick={clearFilters}>Reset view</button>}</div>}
-          <div className="sales-table-footer"><span>{jobs.length ? `${currentPage * pageSize + 1}–${Math.min((currentPage + 1) * pageSize, jobs.length)} of ${jobs.length} jobs` : '0 jobs'}{filtered ? ' · Filtered view' : ''}</span><div><button className="button compact" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button className="button compact" disabled={(currentPage + 1) * pageSize >= jobs.length} onClick={() => setPage(currentPage + 1)}>Next</button></div></div>
-        </section>
+        </details>
         <p className="sales-footnote">Source: {report.source.sheetName}. All metrics follow your filters. Dates use the sheet’s time zone ({report.source.timezone}). Refresh after changes in Google Sheets.</p>
       </>}
     </div>
     {detail && report && <Modal title={detail.jobNumber} onClose={() => setDetailId(null)}>
       <p className="sales-detail-customer">{detail.customer || 'Customer not entered'}</p><span className="sales-status">{detail.status || 'Not entered'}</span>
+      <h3 className="members-heading">Latest journal note</h3><p className="sales-journal">{plainJournal(detail.journalNote) || 'No journal note entered.'}</p>
       <dl className="sales-details">{[
         ['Estimate', detail.estimate === null ? 'Not entered' : money(detail.estimate)], ['Estimator', detail.estimator], ['Division', detail.division], ['Received', date(detail.receivedDate)], ['Inspected', date(detail.inspectedDate)], ['Insurance carrier', detail.insuranceCarrier], ['Primary adjuster', detail.primaryAdjuster], ['Referred by', detail.referredBy], ['Foreman', detail.foreman], ['Marketing person', detail.marketingPerson], ['Reason for closing', detail.closingReason],
       ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || 'Not entered'}</dd></div>)}</dl>
-      <h3 className="members-heading">Latest journal note</h3><p className="sales-journal">{plainJournal(detail.journalNote) || 'No journal note entered.'}</p>
       <div className="modal-actions"><a className="button" href={`${sourceUrl(report)}&range=A${detail.sourceRow}:O${detail.sourceRow}`} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open in Google Sheets</a><button className="button primary" onClick={() => setDetailId(null)}>Done</button></div>
     </Modal>}
   </section>;
 }
 
+function SalesOpportunityTable({ jobs, today, onOpen }: { jobs: SalesJob[]; today: string; onOpen: (id: string) => void }) {
+  return <div className="sales-table-scroll" role="region" aria-label="Sales opportunities table" tabIndex={0}>
+    <table className="sales-table sales-notes-table" aria-label="Sales opportunities">
+      <thead><tr><th scope="col">Job / Customer</th><th scope="col">Estimator / Status</th><th scope="col">Latest note</th><th scope="col">Estimate / Received</th></tr></thead>
+      <tbody>{jobs.map(job => {
+        const note = plainJournal(job.journalNote || '');
+        const age = ageDays(job, today);
+        return <tr key={job.id}>
+          <td className="sales-job-cell"><button className="sales-job-link" onClick={() => onOpen(job.id)}>{job.jobNumber}<ArrowUpRight size={13} /></button><span className="sales-customer">{job.customer || 'Customer not entered'}</span></td>
+          <td className="sales-owner-cell" data-label="Estimator / Status"><strong>{job.estimator || 'Unassigned'}</strong><small>{job.division || 'Division not entered'}</small><span className="sales-status">{job.status || 'Not entered'}</span></td>
+          <td className="sales-note-cell" data-label="Latest note">{note ? <><p className="sales-note-preview">{note}</p><button className="text-button" aria-label={`Read note for ${job.jobNumber}`} onClick={() => onOpen(job.id)}>Read full note<ArrowUpRight size={12} /></button></> : <p className="sales-note-empty">No note entered</p>}</td>
+          <td className="sales-estimate-cell" data-label="Estimate / Received"><strong className={job.estimate === null ? 'sales-missing' : ''}>{job.estimate === null ? 'Not entered' : money(job.estimate)}</strong><small>{date(job.receivedDate)}</small><small className={isPending(job) && age !== null && age >= 30 ? 'sales-old' : ''}>{age === null ? 'Age unavailable' : age < 0 ? 'Future date' : `${age} ${age === 1 ? 'day' : 'days'} since received`}</small></td>
+        </tr>;
+      })}</tbody>
+    </table>
+  </div>;
+}

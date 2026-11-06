@@ -6,6 +6,32 @@ const jobs = [
   { jobNumber:'TEST-002',customer:'South',estimator:'Two',division:'Remodel',status:'Pending Sales',estimate:null,receivedDate:'2026-10-01',insuranceCarrier:'',referredBy:'' },
   { jobNumber:'TEST-003',customer:'West',estimator:'One',division:'Structure',status:'Closed',estimate:0,receivedDate:'',insuranceCarrier:'',referredBy:'' },
 ];
+
+test('journal text preserves readable paragraphs and decodes exported entities without rendering markup', async () => {
+  const { plainJournal } = await loaded;
+  assert.equal(plainJournal('<p><strong>Spoke with customer.</strong></p><p>Awaiting signature &amp; deposit.</p>'), 'Spoke with customer.\nAwaiting signature & deposit.');
+  assert.equal(plainJournal('Called<br/>Left voicemail.</br>Follow up Friday.'), 'Called\nLeft voicemail.\nFollow up Friday.');
+  assert.equal(plainJournal('<div>&quot;Approved&quot; &#39;scope&#39; &#x2014; next week</div>'), '"Approved" \'scope\' — next week');
+  assert.equal(plainJournal('<p> &nbsp; </p>'), '');
+  assert.equal(plainJournal('<script>badCode()</script><style>body{display:none}</style><p>Customer update.</p>'), 'Customer update.');
+  assert.equal(plainJournal('Email <owner@example.test> &lt;reply pending&gt;'), 'Email <owner@example.test> <reply pending>');
+  assert.equal(plainJournal('Email <a@example.test> or <b@example.test>.'), 'Email <a@example.test> or <b@example.test>.');
+  assert.equal(plainJournal('Unknown &#x110000; &#55296; &custom;'), 'Unknown &#x110000; &#55296; &custom;');
+});
+
+test('notes are searchable and pending-without-notes respects the existing filters', async () => {
+  const { filterSales, emptySalesFilters } = await loaded;
+  const rows = [
+    { ...jobs[0], journalNote: '<p>Customer requested a revised scope &amp; pricing.</p>' },
+    { ...jobs[1], journalNote: '<p>&nbsp;</p>' },
+    { ...jobs[2], journalNote: '' },
+    { ...jobs[0], jobNumber: 'NO-NOTE', journalNote: '' },
+  ];
+  assert.deepEqual(filterSales(rows, { ...emptySalesFilters, search: 'scope & pricing' }).map(j => j.jobNumber), ['TEST-001']);
+  assert.equal(filterSales(rows, { ...emptySalesFilters, search: 'scope', estimator: 'Two' }).length, 0);
+  assert.deepEqual(filterSales(rows, { ...emptySalesFilters, focus: 'no-notes' }).map(j => j.jobNumber), ['TEST-002', 'NO-NOTE']);
+  assert.deepEqual(filterSales(rows, { ...emptySalesFilters, focus: 'no-notes', estimator: 'Two' }).map(j => j.jobNumber), ['TEST-002']);
+});
 test('sales filters and totals use report amounts, keep missing values distinct, and count age from calendar dates', async () => {
   const { ageDays, filterSales, salesSummary, emptySalesFilters, estimatorTotals, agingTotals } = await loaded;
   assert.equal(ageDays(jobs[0], '2026-10-06'), 66);

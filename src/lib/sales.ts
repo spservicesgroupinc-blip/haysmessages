@@ -9,7 +9,7 @@ export interface SalesReport {
   fetchedAt: string; today: string; jobs: SalesJob[];
   quality: { invalidDates: number; invalidEstimates: number; skippedRows: number };
 }
-export type SalesFocus = '' | 'missing' | 'aged' | 'unassigned';
+export type SalesFocus = '' | 'missing' | 'aged' | 'unassigned' | 'no-notes';
 export type SalesPeriod = 'all' | 'month' | '30days';
 export interface SalesFilters { search: string; estimator: string; division: string; status: string; from: string; to: string; estimates: string; focus: SalesFocus }
 export const emptySalesFilters: SalesFilters = { search: '', estimator: '', division: '', status: '', from: '', to: '', estimates: '', focus: '' };
@@ -21,7 +21,7 @@ export function ageDays(job: SalesJob, today: string): number | null {
 }
 export function filterSales(jobs: SalesJob[], filters: SalesFilters, today = '') {
   const search = filters.search.trim().toLowerCase();
-  return jobs.filter(job => (!search || [job.jobNumber, job.customer, job.estimator, job.insuranceCarrier, job.referredBy].some(value => value.toLowerCase().includes(search)))
+  return jobs.filter(job => (!search || [job.jobNumber, job.customer, job.estimator, job.insuranceCarrier, job.referredBy, plainJournal(job.journalNote || '')].some(value => value.toLowerCase().includes(search)))
     && (!filters.estimator || (job.estimator || 'Unassigned') === filters.estimator)
     && (!filters.division || (job.division || 'Unassigned') === filters.division)
     && (!filters.status || (job.status || 'Not entered') === filters.status)
@@ -31,7 +31,8 @@ export function filterSales(jobs: SalesJob[], filters: SalesFilters, today = '')
     && (filters.estimates !== 'entered' || job.estimate !== null)
     && (filters.focus !== 'missing' || job.estimate === null)
     && (filters.focus !== 'aged' || (isPending(job) && (ageDays(job, today) ?? -1) >= 30))
-    && (filters.focus !== 'unassigned' || !job.estimator.trim()));
+    && (filters.focus !== 'unassigned' || !job.estimator.trim())
+    && (filters.focus !== 'no-notes' || (isPending(job) && !plainJournal(job.journalNote || ''))));
 }
 export function salesSummary(jobs: SalesJob[], today: string) {
   let pending = 0, value = 0, missing = 0, aged = 0, pendingValue = 0, unassigned = 0;
@@ -93,5 +94,15 @@ export function agingTotals(jobs: SalesJob[], today: string) {
 }
 // Journal notes are source text, including exported email markup. Never render them as HTML.
 export function plainJournal(value: string) {
-  return value.replace(/<\/?br\s*\/?\s*>/gi, '\n').replace(/<\/?(?:b|strong|div|p|span)[^>]*>/gi, '').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>');
+  const entities: Record<string, string> = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+  return value.replace(/<(script|style)(?=[\s>])[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<\/?(?:br|div|p|li)(?:\s[^>]*|\/?)>/gi, '\n')
+    .replace(/<\/?(?:b|strong|span|em|i|u|a|font|ul|ol)(?:\s[^>]*|\/?)>/gi, '')
+    .replace(/&(nbsp|amp|lt|gt|quot|apos|#\d+|#x[\da-f]+);/gi, (original, entity: string) => {
+      const key = entity.toLowerCase();
+      if (entities[key]) return entities[key];
+      const point = key.startsWith('#x') ? parseInt(key.slice(2), 16) : Number(key.slice(1));
+      return point > 0 && point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff) ? String.fromCodePoint(point) : original;
+    })
+    .replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{2,}/g, '\n').trim();
 }
