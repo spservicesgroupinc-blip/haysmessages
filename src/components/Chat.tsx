@@ -1,8 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Loader2, MessageSquare, Pencil, Send, SmilePlus, Trash2, X } from 'lucide-react';
-import type { Message, Person } from '../lib/types';
+import { Check, ChevronDown, ImagePlus, Loader2, MessageSquare, Pencil, Send, SmilePlus, Trash2, X } from 'lucide-react';
+import type { Message, Person, PreparedPicture } from '../lib/types';
 import { Modal } from './Modal';
 import { useDelivery } from './MessageDelivery';
+import { preparePicture } from '../lib/pictures';
+import { MessagePicture } from './MessagePicture';
 
 export const EMOJI:Record<string,string>={thumbsup:'👍',heart:'❤️',check:'✅',eyes:'👀'};
 export function Avatar({name,small=false}:{name:string;small?:boolean}) {
@@ -13,14 +15,19 @@ export function Avatar({name,small=false}:{name:string;small?:boolean}) {
 function readDraft(key:string):{body:string;id:string}|null {
   try {const draft=JSON.parse(sessionStorage.getItem(`hays.draft:${key}`)||'null');return typeof draft?.body==='string'&&typeof draft?.id==='string'?draft:null;}catch{return null;}
 }
-export function Composer({label,onSend,draftKey}:{label:string;draftKey:string;onSend:(body:string,clientId:string)=>Promise<void>}) {
-  const {outgoing}=useDelivery();
+export function Composer({label,onSend,draftKey}:{label:string;draftKey:string;onSend:(body:string,clientId:string,picture?:PreparedPicture)=>Promise<void>}) {
+  const {outgoing,getPictureDraft,setPictureDraft}=useDelivery();
+  const fileInput=useRef<HTMLInputElement>(null);
+  const [picture,setPicture]=useState<PreparedPicture|undefined>(()=>getPictureDraft(draftKey));
+  const [preparing,setPreparing]=useState(false);
+  const pictureRef=useRef(picture);pictureRef.current=picture;
+  function selectPicture(value?:PreparedPicture){pictureRef.current=value;setPicture(value);setPictureDraft(draftKey,value);}
   const inputId=useId();
   const [body,setBody]=useState(()=>{const draft=readDraft(draftKey);return outgoing.some(m=>m.clientId===draft?.id&&m.pending==='sending')?'':draft?.body||'';});
   const [sending,setSending]=useState(0);
   const [error,setError]=useState('');
   const retry=useRef<{body:string;id:string}|null>(readDraft(draftKey));
-  function persist(text:string,id:string) {try{if(text)sessionStorage.setItem(`hays.draft:${draftKey}`,JSON.stringify({body:text,id}));else sessionStorage.removeItem(`hays.draft:${draftKey}`);}catch{/* Keep the in-memory draft when storage is unavailable. */}}
+  function persist(text:string,id:string) {try{if(text||id)sessionStorage.setItem(`hays.draft:${draftKey}`,JSON.stringify({body:text,id}));else sessionStorage.removeItem(`hays.draft:${draftKey}`);}catch{/* Keep the in-memory draft when storage is unavailable. */}}
   useEffect(()=>{
     const delivered=(event:Event)=>{
       const message=(event as CustomEvent<Message>).detail;
@@ -28,7 +35,7 @@ export function Composer({label,onSend,draftKey}:{label:string;draftKey:string;o
       if(key!==draftKey)return;
       if(readDraft(draftKey)?.id===message.clientId)persist('','');
       if(retry.current?.id===message.clientId){
-        retry.current=null;setError('');setBody(current=>current.trim()===message.body?'':current);
+        retry.current=null;setError('');setBody(current=>current.trim()===message.body?'':current);selectPicture();
       }
     };
     window.addEventListener('hays:message-delivered',delivered);
@@ -36,26 +43,34 @@ export function Composer({label,onSend,draftKey}:{label:string;draftKey:string;o
   },[draftKey]);
   async function send(event?:React.FormEvent){
     event?.preventDefault();
-    const text=body.trim();if(!text)return;
+    const text=body.trim();const selected=pictureRef.current;if((!text&&!selected)||preparing)return;
     const messageId=retry.current?.body===text ? retry.current.id : crypto.randomUUID();retry.current=null;
     // Clear the input and show the message immediately; the draft stays saved
     // until the backend confirms so a failure can always be retried in place.
-    setBody('');setError('');setSending(count=>count+1);persist(text,messageId);
+    setBody('');selectPicture();setError('');setSending(count=>count+1);persist(text,messageId);
     try{
-      await onSend(text,messageId);
+      await onSend(text,messageId,selected);
       if(readDraft(draftKey)?.id===messageId)persist('','');
     }catch(e){
       retry.current={body:text,id:messageId};
+      if(!pictureRef.current&&selected)selectPicture(selected);
       setBody(current=>current.trim()?current:text);
       if(!readDraft(draftKey))persist(text,messageId);
       setError(e instanceof Error?e.message:'Could not send.');
     }finally{setSending(count=>count-1);}
   }
+  async function choosePicture(file?:File){
+    if(!file)return;
+    setPreparing(true);setError('');retry.current=null;
+    try{selectPicture(await preparePicture(file));}catch(e){setError(e instanceof Error?e.message:'Could not prepare picture.');}finally{setPreparing(false);}
+  }
   return <form className="composer" onSubmit={send}>
+    <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" aria-label="Choose picture" hidden onChange={event=>{void choosePicture(event.target.files?.[0]);event.target.value='';}}/>
+    {picture && <div className="composer-picture"><img src={picture.preview} alt="Selected picture"/><span>{picture.name}<small>Caption optional · Ready to send</small></span><button type="button" className="icon-button" aria-label="Remove picture" onClick={()=>{selectPicture();retry.current=null;}}><X size={17}/></button></div>}
     <label className="sr-only" htmlFor={inputId}>{label}</label>
     <textarea id={inputId} aria-label={label} placeholder={label} value={body} onChange={e=>{setBody(e.target.value);persist(e.target.value,retry.current?.body===e.target.value.trim()?retry.current.id:'');}} rows={2} maxLength={4000} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing && window.matchMedia('(pointer:fine)').matches){event.preventDefault();void send();}}}/>
-    <div className="composer-bottom"><span>{sending&&!body.trim()?'Sending…':<><span className="desktop-hint">Enter to send · Shift + Enter for a new line</span><span className="mobile-hint">Keep the team in the loop</span></>}</span><button className="send-button" type="submit" disabled={!body.trim()} aria-label="Send message">{sending&&!body.trim()?<Loader2 className="spin" size={17}/>:<Send size={17}/>}</button></div>
-    {error && <p className="error" role="alert">{error} Your message is still here; you can retry.</p>}
+    <div className="composer-bottom"><button type="button" className="icon-button attach-picture" aria-label="Attach picture" disabled={preparing} onClick={()=>fileInput.current?.click()}>{preparing?<Loader2 className="spin" size={19}/>:<ImagePlus size={19}/>}</button><span>{sending&&!body.trim()?'Sending…':<><span className="desktop-hint">Enter to send · Shift + Enter for a new line</span><span className="mobile-hint">Keep the team in the loop</span></>}</span><button className="send-button" type="submit" disabled={preparing||(!body.trim()&&!picture)} aria-label="Send message">{sending&&!body.trim()?<Loader2 className="spin" size={17}/>:<Send size={17}/>}</button></div>
+    {error && <p className="error" role="alert">{error}</p>}
   </form>;
 }
 
@@ -77,15 +92,16 @@ export function MessageCard({message,user,replyCount=0,onThread,onAction,threadV
   return <article className={`message ${message.deleted?'deleted':''}${pending?' pending':''}`} aria-busy={message.pending==='sending'||undefined}>
     <Avatar name={message.authorName}/>
     <div className="message-content">
-      <div className="message-meta"><strong>{message.authorName}</strong><time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>{time}</time>{message.pending==='sending'?<span className="pending-note"><Loader2 className="spin" size={11}/> Sending…</span>:message.pending==='failed'?<span className="failed-note">Not sent</span>:message.updatedAt && message.updatedAt!==message.createdAt && !message.deleted && <span className="edited">edited</span>}</div>
-      {editing ? <form className="inline-edit" onSubmit={e=>{e.preventDefault();void action('editMessage',editText);}}><textarea value={editText} onChange={e=>setEditText(e.target.value)} maxLength={4000} required aria-label="Edit message" autoFocus/><div><button className="button primary compact" disabled={busy||!editText.trim()}><Check size={15}/> Save</button><button type="button" className="button compact" onClick={()=>setEditing(false)}>Cancel</button></div></form> : <p className="message-body">{message.deleted?'This message was removed.':message.body}</p>}
+      <div className="message-meta"><strong>{message.authorName}</strong><time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>{time}</time>{message.pending==='sending'?<span className="pending-note"><Loader2 className="spin" size={11}/> {message.deliveryStage==='uploading'?'Uploading picture…':'Sending…'}</span>:message.pending==='failed'?<span className="failed-note">Not sent</span>:message.updatedAt && message.updatedAt!==message.createdAt && !message.deleted && <span className="edited">edited</span>}</div>
+      {editing ? <form className="inline-edit" onSubmit={e=>{e.preventDefault();void action('editMessage',editText);}}><textarea value={editText} onChange={e=>setEditText(e.target.value)} maxLength={4000} required={!message.attachment} aria-label="Edit message" autoFocus/><div><button className="button primary compact" disabled={busy||(!editText.trim()&&!message.attachment)}><Check size={15}/> Save</button><button type="button" className="button compact" onClick={()=>setEditing(false)}>Cancel</button></div></form> : <p className="message-body">{message.deleted?'This message was removed.':message.body}</p>}
+      {!message.deleted && (message.attachment||message.localPicture) && <MessagePicture message={message}/>}
       {!message.deleted && !pending && <>
         <div className="reactions">{Object.entries(message.reactions).filter(([,people])=>people.length).map(([emoji,people])=><button disabled={busy} className={people.includes(user.email)?'reaction active':'reaction'} key={emoji} title={`${people.length} reaction${people.length===1?'':'s'}`} aria-label={`React ${emoji}, ${people.length}`} aria-pressed={people.includes(user.email)} onClick={()=>void action('react',emoji)}>{EMOJI[emoji]} <span>{people.length}</span></button>)}</div>
         <div className="message-actions">{!threadView && <button className="text-button" onClick={()=>onThread(message.parentId||message.id)}><MessageSquare size={13}/>{replyCount?`${replyCount} ${replyCount===1?'reply':'replies'}`:message.parentId?'View thread':'Reply'}</button>}<button className="text-button" disabled={busy} onClick={()=>setReacting(!reacting)} aria-label="Add reaction" aria-expanded={reacting}><SmilePlus size={14}/></button>{mine && <button className="text-button" disabled={busy} aria-label="Edit message" onClick={()=>{setEditing(true);setEditText(message.body);}}><Pencil size={13}/></button>}{(mine||user.role==='admin') && <button className="text-button" disabled={busy} aria-label="Delete message" onClick={()=>setDeleting(true)}><Trash2 size={13}/></button>}</div>
         {reacting && <div className="reaction-picker">{Object.entries(EMOJI).map(([key,emoji])=><button disabled={busy} key={key} aria-label={`React ${key}`} onClick={()=>void action('react',key)}>{emoji}</button>)}<button aria-label="Close reactions" onClick={()=>setReacting(false)}><X size={14}/></button></div>}
       </>}
       {message.deleted && replyCount>0 && !threadView && <button className="text-button" onClick={()=>onThread(message.id)}><MessageSquare size={13}/>{replyCount} {replyCount===1?'reply':'replies'}</button>}
-      {message.pending==='failed' && <div className="failed-delivery"><p>{message.deliveryError}</p><button className="button compact" aria-label="Retry sending" onClick={()=>{void delivery.send(message.conversationId,message.body,message.clientId,message.parentId).catch(()=>{});}}>Retry sending</button></div>}
+      {message.pending==='failed' && <div className="failed-delivery"><p>{message.deliveryError}</p><button className="button compact" aria-label="Retry sending" onClick={()=>{void delivery.retry(message).catch(()=>{});}}>Retry sending</button></div>}
       {error && <p className="error" role="alert">{error}</p>}
     </div>
     {deleting && <Modal title="Remove this message?" onClose={()=>setDeleting(false)}><p className="muted">This removes the message for everyone in the conversation. Thread replies remain available.</p><div className="modal-actions"><button className="button" onClick={()=>setDeleting(false)}>Cancel</button><button className="button primary" disabled={busy} onClick={()=>void action('deleteMessage')}>{busy?'Removing…':'Remove message'}</button></div></Modal>}
